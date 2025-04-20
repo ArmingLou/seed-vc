@@ -161,11 +161,52 @@ python train.py
 - `save-every` はモデルチェックポイントを保存するステップ間隔
 - `num-workers` はデータ読み込みのワーカー数、Windowsの場合は0に設定
 
+### 高度なトレーニングオプション
+
+より高度なトレーニングシナリオでは、以下の追加オプションを使用できます：
+
+- `--val-dataset-dir` または `--val-dir`：モデルパフォーマンスを監視するための検証データセットディレクトリパス
+- `--patience` または `-p`：早期停止の忍耐値（デフォルト：20）
+- `--validation-interval` または `-v`：ステップ単位の検証間隔（デフォルト：50）
+- `--fp16`：より高速なトレーニングとメモリ使用量削減のためのFP16精度トレーニングを有効化
+
+検証と早期停止を含む例：
+```bash
+python train.py 
+--config <path-to-config> 
+--dataset-dir <path-to-data>
+--run-name <run-name>
+--batch-size 2
+--max-steps 1000
+--max-epochs 1000
+--save-every 500
+--num-workers 0
+--val-dataset-dir <path-to-validation-data>
+--patience 20
+--validation-interval 50
+--fp16
+```
+
 4. トレーニングが予期せず停止した場合、同じコマンドを再度実行することで、最後のチェックポイントから再開できます（最新のチェックポイントを見つけられるように、`run-name`と`config`引数が同じであることを確認してください）。
+
+より簡単なトレーニング管理のために、インタラクティブモードと簡略化されたコマンドラインインターフェースを提供する`train.sh`スクリプトも使用できます：
+
+```bash
+# インタラクティブモード
+./train.sh --interactive
+
+# 直接トレーニング
+./train.sh --v1 --gpu --dataset-dir <path-to-data> --run-name <run-name>
+
+# 検証と早期停止を含むトレーニング
+./train.sh --v1 --gpu --dataset-dir <path-to-data> --run-name <run-name> --val-dataset-dir <path-to-validation-data> --patience 20 --validation-interval 50
+```
 
 5. トレーニング後、チェックポイントと設定ファイルのパスを指定することで、トレーニングしたモデルを推論に使用できます。
     - これらは`./runs/<run-name>/`の下にあり、チェックポイントは`ft_model.pth`という名前で、設定ファイルはトレーニング設定ファイルと同じ名前です。
     - 推論時には、ゼロショット使用時と同様に、使用したい話者の参照音声ファイルを指定する必要があります。
+
+インクリメンタルトレーニング、検証セット、早期停止、FP16精度を含む高度なトレーニング技術の詳細な説明については、[トレーニングガイド](TRAINING_GUIDE.md)をご参照ください。
 
 ## TODO📝
 - [x] コードのリリース

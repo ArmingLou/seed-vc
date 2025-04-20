@@ -164,7 +164,12 @@ class CFM(torch.nn.Module):
             # range covered by prompt are set to 0
             y[bib, :, :prompt_lens[bib]] = 0
 
-        estimator_out = self.estimator(y, prompt, x_lens, t.squeeze(), style, mu)
+        # 修复：确保t在squeeze后至少保持1维，避免在批次大小为1时变成标量
+        t_squeezed = t.squeeze()
+        if t_squeezed.dim() == 0:  # 标量情况
+            t_squeezed = t_squeezed.unsqueeze(0)  # 变为1维张量
+
+        estimator_out = self.estimator(y, prompt, x_lens, t_squeezed, style, mu)
         loss = 0
         for bib in range(b):
             loss += self.criterion(estimator_out[bib, :, prompt_lens[bib]:x_lens[bib]], u[bib, :, prompt_lens[bib]:x_lens[bib]])

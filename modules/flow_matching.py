@@ -91,7 +91,7 @@ class BASECFM(torch.nn.Module, ABC):
 
                 # Perform a single forward pass for both original and CFG inputs
                 stacked_dphi_dt = self.estimator(
-                    stacked_x, stacked_prompt_x, x_lens, stacked_t, stacked_style, stacked_mu,
+                    stacked_x, stacked_prompt_x, x_lens, stacked_t, stacked_style, stacked_mu, False,
                 )
 
                 # Split the output back into the original and CFG components
@@ -100,7 +100,7 @@ class BASECFM(torch.nn.Module, ABC):
                 # Apply CFG formula
                 dphi_dt = (1.0 + inference_cfg_rate) * dphi_dt - inference_cfg_rate * cfg_dphi_dt
             else:
-                dphi_dt = self.estimator(x, prompt_x, x_lens, t.unsqueeze(0), style, mu)
+                dphi_dt = self.estimator(x, prompt_x, x_lens, t.unsqueeze(0), style, mu, False)
 
             x = x + dt * dphi_dt
             t = t + dt
@@ -146,7 +146,7 @@ class BASECFM(torch.nn.Module, ABC):
             if self.zero_prompt_speech_token:
                 mu[bib, :, :prompt_lens[bib]] = 0
 
-        estimator_out = self.estimator(y, prompt, x_lens, t.squeeze(1).squeeze(1), style, mu, prompt_lens)
+        estimator_out = self.estimator(y, prompt, x_lens, t.squeeze(1).squeeze(1), style, mu, mask_content=False)
         loss = 0
         for bib in range(b):
             loss += self.criterion(estimator_out[bib, :, prompt_lens[bib]:x_lens[bib]], u[bib, :, prompt_lens[bib]:x_lens[bib]])

@@ -252,34 +252,54 @@ class VoiceConversionWrapper(torch.nn.Module):
             self,
             cfm_checkpoint_path = None,
             ar_checkpoint_path = None,
+            train_cfm = True,
+            train_ar = True
     ):
-        if cfm_checkpoint_path is None:
+        # cfm
+        if cfm_checkpoint_path is not None and train_cfm:
+            print(f"Loading CFM checkpoint from {cfm_checkpoint_path}...")
+            cfm_checkpoint = torch.load(cfm_checkpoint_path, map_location="cpu")
+            # 检查检查点是否包含CFM部分
+            if 'cfm' not in cfm_checkpoint.get("net", {}):
+                raise KeyError(f"CFM checkpoint does not contain 'cfm' key. Available keys in 'net': {list(cfm_checkpoint.get('net', {}).keys())}")
+            cfm_length_regulator_state_dict = self.strip_prefix(cfm_checkpoint["net"]['length_regulator'], "module.")
+            cfm_state_dict = self.strip_prefix(cfm_checkpoint["net"]['cfm'], "module.")
+            missing_keys, unexpected_keys = self.cfm.load_state_dict(cfm_state_dict, strict=False)
+            missing_keys, unexpected_keys = self.cfm_length_regulator.load_state_dict(cfm_length_regulator_state_dict, strict=False)
+        elif cfm_checkpoint_path is None and train_cfm:
+            # 只有当cfm_checkpoint_path为None且需要训练CFM模型时才加载默认的CFM模型
             cfm_checkpoint_path = load_custom_model_from_hf(
                 repo_id=DEFAULT_REPO_ID,
                 model_filename=DEFAULT_CFM_CHECKPOINT,
             )
-        else:
-            print(f"Loading CFM checkpoint from {cfm_checkpoint_path}...")
-        if ar_checkpoint_path is None:
+            cfm_checkpoint = torch.load(cfm_checkpoint_path, map_location="cpu")
+            cfm_length_regulator_state_dict = self.strip_prefix(cfm_checkpoint["net"]['length_regulator'], "module.")
+            cfm_state_dict = self.strip_prefix(cfm_checkpoint["net"]['cfm'], "module.")
+            missing_keys, unexpected_keys = self.cfm.load_state_dict(cfm_state_dict, strict=False)
+            missing_keys, unexpected_keys = self.cfm_length_regulator.load_state_dict(cfm_length_regulator_state_dict, strict=False)
+
+        # ar
+        if ar_checkpoint_path is not None and train_ar:
+            print(f"Loading AR checkpoint from {ar_checkpoint_path}...")
+            ar_checkpoint = torch.load(ar_checkpoint_path, map_location="cpu")
+            # 检查检查点是否包含AR部分
+            if 'ar' not in ar_checkpoint.get("net", {}):
+                raise KeyError(f"AR checkpoint does not contain 'ar' key. Available keys in 'net': {list(ar_checkpoint.get('net', {}).keys())}")
+            ar_length_regulator_state_dict = self.strip_prefix(ar_checkpoint["net"]['length_regulator'], "module.")
+            ar_state_dict = self.strip_prefix(ar_checkpoint["net"]['ar'], "module.")
+            missing_keys, unexpected_keys = self.ar.load_state_dict(ar_state_dict, strict=False)
+            missing_keys, unexpected_keys = self.ar_length_regulator.load_state_dict(ar_length_regulator_state_dict, strict=False)
+        elif ar_checkpoint_path is None and train_ar:
+            # 只有当ar_checkpoint_path为None且需要训练AR模型时才加载默认的AR模型
             ar_checkpoint_path = load_custom_model_from_hf(
                 repo_id=DEFAULT_REPO_ID,
                 model_filename=DEFAULT_AR_CHECKPOINT,
             )
-        else:
-            print(f"Loading AR checkpoint from {ar_checkpoint_path}...")
-        # cfm
-        cfm_checkpoint = torch.load(cfm_checkpoint_path, map_location="cpu")
-        cfm_length_regulator_state_dict = self.strip_prefix(cfm_checkpoint["net"]['length_regulator'], "module.")
-        cfm_state_dict = self.strip_prefix(cfm_checkpoint["net"]['cfm'], "module.")
-        missing_keys, unexpected_keys = self.cfm.load_state_dict(cfm_state_dict, strict=False)
-        missing_keys, unexpected_keys = self.cfm_length_regulator.load_state_dict(cfm_length_regulator_state_dict, strict=False)
-
-        # ar
-        ar_checkpoint = torch.load(ar_checkpoint_path, map_location="cpu")
-        ar_length_regulator_state_dict = self.strip_prefix(ar_checkpoint["net"]['length_regulator'], "module.")
-        ar_state_dict = self.strip_prefix(ar_checkpoint["net"]['ar'], "module.")
-        missing_keys, unexpected_keys = self.ar.load_state_dict(ar_state_dict, strict=False)
-        missing_keys, unexpected_keys = self.ar_length_regulator.load_state_dict(ar_length_regulator_state_dict, strict=False)
+            ar_checkpoint = torch.load(ar_checkpoint_path, map_location="cpu")
+            ar_length_regulator_state_dict = self.strip_prefix(ar_checkpoint["net"]['length_regulator'], "module.")
+            ar_state_dict = self.strip_prefix(ar_checkpoint["net"]['ar'], "module.")
+            missing_keys, unexpected_keys = self.ar.load_state_dict(ar_state_dict, strict=False)
+            missing_keys, unexpected_keys = self.ar_length_regulator.load_state_dict(ar_length_regulator_state_dict, strict=False)
 
         # content extractor
         content_extractor_narrow_checkpoint_path = load_custom_model_from_hf(
@@ -314,10 +334,21 @@ class VoiceConversionWrapper(torch.nn.Module):
             wave_lens_16k = torch.tensor([waves_16k.size(-1)], dtype=torch.int32).to(waves_16k.device)
         feat_list = []
         for bib in range(waves_16k.size(0)):
-            feat = torchaudio.compliance.kaldi.fbank(waves_16k[bib:bib + 1, :wave_lens_16k[bib]],
-                               num_mel_bins=80,
-                               dither=0,
-                               sample_frequency=16000)
+            # 处理MPS设备上的fbank计算
+            if waves_16k.device.type == "mps":
+                # MPS不支持ComplexFloat类型，需要在CPU上计算fbank
+                waves_16k_cpu = waves_16k[bib:bib + 1, :wave_lens_16k[bib]].cpu()
+                feat = torchaudio.compliance.kaldi.fbank(waves_16k_cpu,
+                                   num_mel_bins=80,
+                                   dither=0,
+                                   sample_frequency=16000)
+                # 将结果移回MPS设备
+                feat = feat.to(waves_16k.device)
+            else:
+                feat = torchaudio.compliance.kaldi.fbank(waves_16k[bib:bib + 1, :wave_lens_16k[bib]],
+                                   num_mel_bins=80,
+                                   dither=0,
+                                   sample_frequency=16000)
             feat = feat - feat.mean(dim=0, keepdim=True)
             feat_list.append(feat)
         max_feat_len = max([feat.size(0) for feat in feat_list])
@@ -505,8 +536,8 @@ class VoiceConversionWrapper(torch.nn.Module):
             repetition_penalty: float = 1.5,
             convert_style: bool = False,
             anonymization_only: bool = False,
-            device: torch.device = torch.device("cuda"),
-            dtype: torch.dtype = torch.float16,
+            device: torch.device = torch.device("cpu"),
+            dtype: torch.dtype = torch.float32,
             stream_output: bool = True,
     ):
         """
@@ -556,7 +587,9 @@ class VoiceConversionWrapper(torch.nn.Module):
         max_context_window = self.sr // self.hop_size * self.dit_max_context_len
         overlap_wave_len = self.overlap_frame_len * self.hop_size
         
-        with torch.autocast(device_type=device.type, dtype=dtype):
+        # 处理MPS设备上的自动混合精度计算
+        if device.type == "mps":
+            # MPS不支持autocast，直接执行计算
             # Compute content features
             source_content_indices = self._process_content_features(source_wave_16k_tensor, is_narrow=False)
             target_content_indices = self._process_content_features(target_wave_16k_tensor, is_narrow=False)
@@ -564,15 +597,32 @@ class VoiceConversionWrapper(torch.nn.Module):
             target_style = self.compute_style(target_wave_16k_tensor)
             prompt_condition, _, = self.cfm_length_regulator(target_content_indices,
                                                              ylens=torch.LongTensor([target_mel_len]).to(device))
+        else:
+            # 其他设备使用autocast
+            with torch.autocast(device_type=device.type, dtype=dtype):
+                # Compute content features
+                source_content_indices = self._process_content_features(source_wave_16k_tensor, is_narrow=False)
+                target_content_indices = self._process_content_features(target_wave_16k_tensor, is_narrow=False)
+                # Compute style features
+                target_style = self.compute_style(target_wave_16k_tensor)
+                prompt_condition, _, = self.cfm_length_regulator(target_content_indices,
+                                                                 ylens=torch.LongTensor([target_mel_len]).to(device))
 
         # prepare for streaming
         generated_wave_chunks = []
         processed_frames = 0
         previous_chunk = None
         if convert_style:
-            with torch.autocast(device_type=device.type, dtype=dtype):
+            # 处理MPS设备上的自动混合精度计算
+            if device.type == "mps":
+                # MPS不支持autocast，直接执行计算
                 source_narrow_indices = self._process_content_features(source_wave_16k_tensor, is_narrow=True)
                 target_narrow_indices = self._process_content_features(target_wave_16k_tensor, is_narrow=True)
+            else:
+                # 其他设备使用autocast
+                with torch.autocast(device_type=device.type, dtype=dtype):
+                    source_narrow_indices = self._process_content_features(source_wave_16k_tensor, is_narrow=True)
+                    target_narrow_indices = self._process_content_features(target_wave_16k_tensor, is_narrow=True)
             src_narrow_reduced, src_narrow_len = self.duration_reduction_func(source_narrow_indices[0], 1)
             tgt_narrow_reduced, tgt_narrow_len = self.duration_reduction_func(target_narrow_indices[0], 1)
             # Process src_narrow_reduced in chunks of max 1000 tokens
@@ -581,12 +631,14 @@ class VoiceConversionWrapper(torch.nn.Module):
             # Process src_narrow_reduced in chunks
             for i in range(0, len(src_narrow_reduced), max_chunk_size):
                 is_last_chunk = i + max_chunk_size >= len(src_narrow_reduced)
-                with torch.autocast(device_type=device.type, dtype=dtype):
+                # 处理MPS设备上的自动混合精度计算
+                if device.type == "mps":
+                    # MPS不支持autocast，直接执行计算
                     chunk = src_narrow_reduced[i:i + max_chunk_size]
                     if anonymization_only:
                         chunk_ar_cond = self.ar_length_regulator(chunk[None])[0]
                         chunk_ar_out = self.ar.generate(chunk_ar_cond, torch.zeros([1, 0]).long().to(device),
-                                                        compiled_decode_fn=self.compiled_decode_fn,
+                                                      compiled_decode_fn=self.compiled_decode_fn,
                                                       top_p=top_p, temperature=temperature,
                                                       repetition_penalty=repetition_penalty)
                     else:
@@ -615,6 +667,42 @@ class VoiceConversionWrapper(torch.nn.Module):
                         random_voice=anonymization_only,
                     )
                     vc_mel = vc_mel[:, :, target_mel_len:original_len]
+                else:
+                    # 其他设备使用autocast
+                    with torch.autocast(device_type=device.type, dtype=dtype):
+                        chunk = src_narrow_reduced[i:i + max_chunk_size]
+                        if anonymization_only:
+                            chunk_ar_cond = self.ar_length_regulator(chunk[None])[0]
+                            chunk_ar_out = self.ar.generate(chunk_ar_cond, torch.zeros([1, 0]).long().to(device),
+                                                          compiled_decode_fn=self.compiled_decode_fn,
+                                                          top_p=top_p, temperature=temperature,
+                                                          repetition_penalty=repetition_penalty)
+                        else:
+                            # For each chunk, we need to include tgt_narrow_reduced as context
+                            chunk_ar_cond = self.ar_length_regulator(torch.cat([tgt_narrow_reduced, chunk], dim=0)[None])[0]
+                            chunk_ar_out = self.ar.generate(chunk_ar_cond, target_content_indices, compiled_decode_fn=self.compiled_decode_fn,
+                                                          top_p=top_p, temperature=temperature,
+                                                          repetition_penalty=repetition_penalty)
+                        chunkar_out_mel_len = torch.LongTensor([int(source_mel_len / source_content_indices.size(
+                            -1) * chunk_ar_out.size(-1) * length_adjust)]).to(device)
+                        # Length regulation
+                        chunk_cond, _ = self.cfm_length_regulator(chunk_ar_out, ylens=torch.LongTensor([chunkar_out_mel_len]).to(device))
+                        cat_condition = torch.cat([prompt_condition, chunk_cond], dim=1)
+                        original_len = cat_condition.size(1)
+                        # pad cat_condition to compile_len
+                        if self.dit_compiled:
+                            cat_condition = torch.nn.functional.pad(cat_condition,
+                                                                    (0, 0, 0, self.compile_len - cat_condition.size(1),),
+                                                                    value=0)
+                        # Voice Conversion
+                        vc_mel = self.cfm.inference(
+                            cat_condition,
+                            torch.LongTensor([original_len]).to(device),
+                            target_mel, target_style, diffusion_steps,
+                            inference_cfg_rate=[intelligebility_cfg_rate, similarity_cfg_rate],
+                            random_voice=anonymization_only,
+                        )
+                        vc_mel = vc_mel[:, :, target_mel_len:original_len]
                 vc_wave = self.vocoder(vc_mel).squeeze()[None]
                 processed_frames, previous_chunk, should_break, mp3_bytes, full_audio = self._stream_wave_chunks(
                     vc_wave, processed_frames, vc_mel, overlap_wave_len,
@@ -641,7 +729,9 @@ class VoiceConversionWrapper(torch.nn.Module):
                 if self.dit_compiled:
                     cat_condition = torch.nn.functional.pad(cat_condition,
                                                             (0, 0, 0, self.compile_len - cat_condition.size(1),), value=0)
-                with torch.autocast(device_type=device.type, dtype=torch.float32):  # force CFM to use float32
+                # 处理MPS设备上的自动混合精度计算
+                if device.type == "mps":
+                    # MPS不支持autocast，直接执行计算，但CFM部分强制使用float32
                     # Voice Conversion
                     vc_mel = self.cfm.inference(
                         cat_condition,
@@ -650,6 +740,17 @@ class VoiceConversionWrapper(torch.nn.Module):
                         inference_cfg_rate=[intelligebility_cfg_rate, similarity_cfg_rate],
                         random_voice=anonymization_only,
                     )
+                else:
+                    # 其他设备使用autocast
+                    with torch.autocast(device_type=device.type, dtype=torch.float32):  # force CFM to use float32
+                        # Voice Conversion
+                        vc_mel = self.cfm.inference(
+                            cat_condition,
+                            torch.LongTensor([original_len]).to(device),
+                            target_mel, target_style, diffusion_steps,
+                            inference_cfg_rate=[intelligebility_cfg_rate, similarity_cfg_rate],
+                            random_voice=anonymization_only,
+                        )
                 vc_mel = vc_mel[:, :, target_mel_len:original_len]
                 vc_wave = self.vocoder(vc_mel).squeeze()[None]
 

@@ -1,5 +1,7 @@
 import os
 os.environ['HF_HUB_CACHE'] = './checkpoints/hf_cache'
+# 设置 MPS 回退到 CPU 的环境变量
+os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 import gradio as gr
 import torch
 import torchaudio
@@ -15,10 +17,14 @@ import argparse
 fp16 = False
 device = None
 def load_models(args):
-    global sr, hop_length, fp16
+    global sr, hop_length, fp16, whisper_model
     fp16 = args.fp16
     print(f"Using device: {device}")
     print(f"Using fp16: {fp16}")
+    # 不再根据设备类型强制修改fp16，而是根据参数决定
+    # 仅在需要时打印警告信息
+    if (device.type == "cpu" or device.type == "mps") and fp16:
+        print(f"Warning: fp16 is enabled for {device.type} device, which may cause issues")
     # f0 conditioned model
     if args.checkpoint is None or args.checkpoint == "":
         dit_checkpoint_path, dit_config_path = load_custom_model_from_hf("Plachta/Seed-VC",
@@ -101,10 +107,49 @@ def load_models(args):
         # whisper
         from transformers import AutoFeatureExtractor, WhisperModel
         whisper_name = model_params.speech_tokenizer.name
-        whisper_model = WhisperModel.from_pretrained(whisper_name, torch_dtype=torch.float16).to(device)
+        
+        # 让WhisperModel自动选择合适的数据类型，根据设备支持情况
+        if fp16:
+            # 如果启用fp16，尝试使用float16精度加载模型
+            print(f"正在尝试使用fp16精度加载Whisper模型到{device}设备...")
+            try:
+                whisper_model = WhisperModel.from_pretrained(whisper_name, torch_dtype=torch.float16).to(device)
+                model_dtype = whisper_model.encoder.dtype
+                print(f"Whisper模型已加载到{device}设备，使用模型默认数据类型: {model_dtype}")
+            except Exception as e:
+                print(f"警告: 在{device}设备上无法使用fp16精度加载Whisper模型: {e}")
+                print(f"正在回退到float32精度加载Whisper模型...")
+                whisper_model = WhisperModel.from_pretrained(whisper_name, torch_dtype=torch.float32).to(device)
+                model_dtype = whisper_model.encoder.dtype
+                fp16 = False
+                print(f"信息: 已将内部fp16标志设置为False，以保持一致性")
+                print(f"Whisper模型已加载到{device}设备，使用float32数据类型")
+            # 检查模型实际加载的数据类型是否与用户指定的fp16值一致
+            if model_dtype != (torch.float16 if fp16 else torch.float32):
+                print(f"信息: Whisper模型已根据设备特性自动切换数据类型，从{'float16' if fp16 else 'float32'}切换到{model_dtype}")
+                # 当模型自动切换数据类型时，将内部fp16标志设置为False，以避免后续处理中的不一致
+                if model_dtype == torch.float32:
+                    fp16 = False
+                    print(f"信息: 已将内部fp16标志设置为False，以保持一致性")
+            else:
+                print(f"信息: Whisper模型已按用户指定的fp16设置加载，数据类型为{model_dtype}")
+        else:
+            # 如果不启用fp16，强制使用float32
+            print(f"正在使用float32精度加载Whisper模型到{device}设备...")
+            whisper_model = WhisperModel.from_pretrained(whisper_name, torch_dtype=torch.float32).to(device)
+            print(f"Whisper模型已加载到{device}设备，使用float32数据类型")
         del whisper_model.decoder
         whisper_feature_extractor = AutoFeatureExtractor.from_pretrained(whisper_name)
 
+        def reload_whisper_model():
+            """重新加载Whisper模型为float32精度"""
+            global fp16, whisper_model
+            fp16 = False
+            print(f"信息: 已将内部fp16标志设置为False，以保持一致性")
+            # 重新加载模型为float32精度
+            whisper_model = WhisperModel.from_pretrained(whisper_name, torch_dtype=torch.float32).to(device)
+            print(f"信息: 已成功回退到float32精度并重新加载模型")
+            
         def semantic_fn(waves_16k):
             ori_inputs = whisper_feature_extractor([waves_16k.squeeze(0).cpu().numpy()],
                                                    return_tensors="pt",
@@ -112,13 +157,49 @@ def load_models(args):
             ori_input_features = whisper_model._mask_input_features(
                 ori_inputs.input_features, attention_mask=ori_inputs.attention_mask).to(device)
             with torch.no_grad():
-                ori_outputs = whisper_model.encoder(
-                    ori_input_features.to(whisper_model.encoder.dtype),
-                    head_mask=None,
-                    output_attentions=False,
-                    output_hidden_states=False,
-                    return_dict=True,
-                )
+                # 确保输入数据类型与模型兼容，避免CPU/MPS设备上的LayerNorm错误
+                if device.type == "cpu":
+                    # CPU设备可以尝试使用模型的数据类型，但如果出现问题则回退到float32
+                    try:
+                        encoder_input = ori_input_features.to(whisper_model.encoder.dtype)
+                    except:
+                        encoder_input = ori_input_features.to(torch.float32)
+                elif device.type == "mps":
+                    # MPS设备可以尝试使用模型的数据类型，但如果出现问题则回退到float32
+                    try:
+                        encoder_input = ori_input_features.to(whisper_model.encoder.dtype)
+                    except:
+                        encoder_input = ori_input_features.to(torch.float32)
+                else:
+                    encoder_input = ori_input_features.to(whisper_model.encoder.dtype)
+                
+                # 执行模型推理，处理可能的LayerNorm错误
+                try:
+                    ori_outputs = whisper_model.encoder(
+                        encoder_input,
+                        head_mask=None,
+                        output_attentions=False,
+                        output_hidden_states=False,
+                        return_dict=True,
+                    )
+                except RuntimeError as e:
+                    if "LayerNormKernelImpl" in str(e) and device.type == "cpu":
+                        print(f"警告: 在CPU设备上使用fp16时遇到LayerNorm错误，正在回退到float32精度...")
+                        # 回退到float32精度重新加载模型
+                        reload_whisper_model()
+                        # 重新处理输入特征
+                        encoder_input = ori_input_features.to(torch.float32)
+                        ori_outputs = whisper_model.encoder(
+                            encoder_input,
+                            head_mask=None,
+                            output_attentions=False,
+                            output_hidden_states=False,
+                            return_dict=True,
+                        )
+                        print(f"信息: 已成功回退到float32精度并重新执行推理")
+                    else:
+                        # 如果不是预期的LayerNorm错误，则重新抛出异常
+                        raise e
             S_ori = ori_outputs.last_hidden_state.to(torch.float32)
             S_ori = S_ori[:, :waves_16k.size(-1) // 320 + 1]
             return S_ori
@@ -132,7 +213,9 @@ def load_models(args):
         hubert_model = HubertModel.from_pretrained(hubert_model_name)
         hubert_model = hubert_model.to(device)
         hubert_model = hubert_model.eval()
-        hubert_model = hubert_model.half()
+        # 根据fp16参数决定是否使用half精度
+        if fp16:
+            hubert_model = hubert_model.half()
 
         def semantic_fn(waves_16k):
             ori_waves_16k_input_list = [
@@ -145,8 +228,13 @@ def load_models(args):
                                                   padding=True,
                                                   sampling_rate=16000).to(device)
             with torch.no_grad():
+                # 根据fp16参数决定是否使用half精度
+                if fp16:
+                    input_values = ori_inputs.input_values.half()
+                else:
+                    input_values = ori_inputs.input_values
                 ori_outputs = hubert_model(
-                    ori_inputs.input_values.half(),
+                    input_values,
                 )
             S_ori = ori_outputs.last_hidden_state.float()
             return S_ori
@@ -162,7 +250,9 @@ def load_models(args):
         wav2vec_model.encoder.layers = wav2vec_model.encoder.layers[:output_layer]
         wav2vec_model = wav2vec_model.to(device)
         wav2vec_model = wav2vec_model.eval()
-        wav2vec_model = wav2vec_model.half()
+        # 根据fp16参数决定是否使用half精度
+        if fp16:
+            wav2vec_model = wav2vec_model.half()
 
         def semantic_fn(waves_16k):
             ori_waves_16k_input_list = [
@@ -175,8 +265,13 @@ def load_models(args):
                                                    padding=True,
                                                    sampling_rate=16000).to(device)
             with torch.no_grad():
+                # 根据fp16参数决定是否使用half精度
+                if fp16:
+                    input_values = ori_inputs.input_values.half()
+                else:
+                    input_values = ori_inputs.input_values
                 ori_outputs = wav2vec_model(
-                    ori_inputs.input_values.half(),
+                    input_values,
                 )
             S_ori = ori_outputs.last_hidden_state.float()
             return S_ori
@@ -284,10 +379,19 @@ def voice_conversion(source, target, diffusion_steps, length_adjust, inference_c
     target_lengths = torch.LongTensor([int(mel.size(2) * length_adjust)]).to(mel.device)
     target2_lengths = torch.LongTensor([mel2.size(2)]).to(mel2.device)
 
-    feat2 = torchaudio.compliance.kaldi.fbank(ref_waves_16k,
-                                              num_mel_bins=80,
-                                              dither=0,
-                                              sample_frequency=16000)
+    # 处理MPS设备不支持ComplexFloat类型的问题
+    if device.type == "mps":
+        # 在CPU上计算fbank特征，然后移回MPS设备
+        feat2 = torchaudio.compliance.kaldi.fbank(ref_waves_16k.cpu(),
+                                                  num_mel_bins=80,
+                                                  dither=0,
+                                                  sample_frequency=16000)
+        feat2 = feat2.to(device)
+    else:
+        feat2 = torchaudio.compliance.kaldi.fbank(ref_waves_16k,
+                                                  num_mel_bins=80,
+                                                  dither=0,
+                                                  sample_frequency=16000)
     feat2 = feat2 - feat2.mean(dim=0, keepdim=True)
     style2 = campplus_model(feat2.unsqueeze(0))
 
@@ -333,13 +437,32 @@ def voice_conversion(source, target, diffusion_steps, length_adjust, inference_c
         chunk_f0 = interpolated_shifted_f0_alt[:, processed_frames:processed_frames + max_source_window]
         is_last_chunk = processed_frames + max_source_window >= cond.size(1)
         cat_condition = torch.cat([prompt_condition, chunk_cond], dim=1)
-        with torch.autocast(device_type=device.type, dtype=torch.float16 if fp16 else torch.float32):
-            # Voice Conversion
+        
+        # 处理MPS设备不支持autocast的问题
+        if device.type == "mps":
+            # MPS不支持autocast，直接执行计算
             vc_target = inference_module.cfm.inference(cat_condition,
                                                        torch.LongTensor([cat_condition.size(1)]).to(mel2.device),
                                                        mel2, style2, None, diffusion_steps,
                                                        inference_cfg_rate=inference_cfg_rate)
             vc_target = vc_target[:, :, mel2.size(-1):]
+        else:
+            # 对于CPU设备或fp16为False的情况，不使用autocast
+            if device.type == "cpu" or not fp16:
+                # Voice Conversion
+                vc_target = inference_module.cfm.inference(cat_condition,
+                                                           torch.LongTensor([cat_condition.size(1)]).to(mel2.device),
+                                                           mel2, style2, None, diffusion_steps,
+                                                           inference_cfg_rate=inference_cfg_rate)
+                vc_target = vc_target[:, :, mel2.size(-1):]
+            else:
+                with torch.autocast(device_type=device.type, dtype=torch.float16 if fp16 else torch.float32):
+                    # Voice Conversion
+                    vc_target = inference_module.cfm.inference(cat_condition,
+                                                               torch.LongTensor([cat_condition.size(1)]).to(mel2.device),
+                                                               mel2, style2, None, diffusion_steps,
+                                                               inference_cfg_rate=inference_cfg_rate)
+                    vc_target = vc_target[:, :, mel2.size(-1):]
         vc_wave = vocoder_fn(vc_target.float()).squeeze().cpu()
         if vc_wave.ndim == 1:
             vc_wave = vc_wave.unsqueeze(0)
@@ -441,7 +564,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
     cuda_target = f"cuda:{args.gpu}" if args.gpu else "cuda" 
 
-    if torch.cuda.is_available():
+    # 根据环境变量决定是否强制使用 CPU
+    if os.environ.get("FORCE_CPU", "0") == "1":
+        device = torch.device("cpu")
+    elif torch.cuda.is_available():
         device = torch.device(cuda_target)
     elif torch.backends.mps.is_available():
         device = torch.device("mps")

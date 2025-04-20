@@ -194,7 +194,33 @@ where:
 - `max-steps` is the maximum number of steps to train, choose depends on your dataset size and training time
 - `max-epochs` is the maximum number of epochs to train, choose depends on your dataset size and training time
 - `save-every` is the number of steps to save the model checkpoint
-- `num-workers` is the number of workers for data loading, set to 0 for Windows    
+- `num-workers` is the number of workers for data loading, set to 0 for Windows
+
+### Advanced Training Options
+
+For more advanced training scenarios, you can use the following additional options:
+
+- `--val-dataset-dir` or `--val-dir`: Path to validation dataset directory for monitoring model performance
+- `--patience` or `-p`: Patience for early stopping (default: 20)
+- `--validation-interval` or `-v`: Validation interval in steps (default: 50)
+- `--fp16`: Enable FP16 precision training for faster training and reduced memory usage
+
+Example with validation and early stopping:
+```bash
+python train.py 
+--config <path-to-config> 
+--dataset-dir <path-to-data>
+--run-name <run-name>
+--batch-size 2
+--max-steps 1000
+--max-epochs 1000
+--save-every 500
+--num-workers 0
+--val-dataset-dir <path-to-validation-data>
+--patience 20
+--validation-interval 50
+--fp16
+```    
 
 Similarly, to train V2 model, you can run: (note that V2 training script supports multi-GPU training)
 ```bash
@@ -211,9 +237,24 @@ accelerate launch train_v2.py
 
 4. If training accidentially stops, you can resume training by running the same command again, the training will continue from the last checkpoint. (Make sure `run-name` and `config` arguments are the same so that latest checkpoint can be found)
 
+For easier training management, you can also use the `train.sh` script which provides an interactive mode and simplified command-line interface:
+
+```bash
+# Interactive mode
+./train.sh --interactive
+
+# Direct training
+./train.sh --v1 --gpu --dataset-dir <path-to-data> --run-name <run-name>
+
+# With validation and early stopping
+./train.sh --v1 --gpu --dataset-dir <path-to-data> --run-name <run-name> --val-dataset-dir <path-to-validation-data> --patience 20 --validation-interval 50
+```
+
 5. After training, you can use the trained model for inference by specifying the path to the checkpoint and config file.
     - They should be under `./runs/<run-name>/`, with the checkpoint named `ft_model.pth` and config file with the same name as the training config file.
     - You still have to specify a reference audio file of the speaker you'd like to use during inference, similar to zero-shot usage.
+
+For detailed instructions on advanced training techniques including incremental training, validation sets, early stopping, and FP16 precision, please refer to the [Training Guide](TRAINING_GUIDE.md).
 
 ## TODO📝
 - [x] Release code

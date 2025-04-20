@@ -15,7 +15,13 @@ class OpenVoiceBaseClass(object):
     def __init__(self, 
                 config_path, 
                 device='cuda:0'):
-        if 'cuda' in device:
+        # Convert torch.device to string if needed
+        if isinstance(device, torch.device):
+            device_str = str(device)
+        else:
+            device_str = device
+            
+        if 'cuda' in device_str:
             assert torch.cuda.is_available()
 
         hps = utils.get_hparams_from_file(config_path)
@@ -30,6 +36,7 @@ class OpenVoiceBaseClass(object):
         model.eval()
         self.model = model
         self.hps = hps
+        # Store the original device parameter (could be torch.device or string)
         self.device = device
 
     def load_ckpt(self, ckpt_path):

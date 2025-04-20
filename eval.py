@@ -1,9 +1,12 @@
+import os
+import os.path as osp
+# 设置 MPS 回退到 CPU 的环境变量
+os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+
 import shutil
 import warnings
 import argparse
 import torch
-import os
-import os.path as osp
 import yaml
 
 warnings.simplefilter("ignore")
@@ -24,7 +27,10 @@ from resemblyzer import preprocess_wav, VoiceEncoder
 
 # Load model and configuration
 
-if torch.cuda.is_available():
+# 根据环境变量决定是否强制使用 CPU
+if os.environ.get("FORCE_CPU", "0") == "1":
+    device = torch.device("cpu")
+elif torch.cuda.is_available():
     device = torch.device("cuda")
 elif torch.backends.mps.is_available():
     device = torch.device("mps")
@@ -61,6 +67,8 @@ mos_computer = DNSMOSComputer(
 )
 
 def load_models(args):
+    # 获取fp16参数，如果没有指定则默认为True
+    fp16 = getattr(args, 'fp16', True)
     dit_checkpoint_path, dit_config_path = load_custom_model_from_hf("Plachta/Seed-VC",
                                                                      "DiT_seed_v2_uvit_whisper_small_wavenet_bigvgan_pruned.pth",
                                                                      "config_dit_mel_seed_uvit_whisper_small_wavenet.yml")
@@ -135,7 +143,17 @@ def load_models(args):
         # whisper
         from transformers import AutoFeatureExtractor, WhisperModel
         whisper_name = model_params.speech_tokenizer.name
-        whisper_model = WhisperModel.from_pretrained(whisper_name, torch_dtype=torch.float16).to(device)
+        # 根据设备类型和fp16参数选择合适的数据类型
+        # 注意：CPU和MPS设备对float16的支持有限，但仍可以尝试使用
+        if device.type == "cpu":
+            # CPU设备可以尝试使用fp16，但如果出现问题则回退到float32
+            whisper_dtype = torch.float16 if fp16 else torch.float32
+        elif device.type == "mps":
+            # MPS设备可以尝试使用fp16，但如果出现问题则回退到float32
+            whisper_dtype = torch.float16 if fp16 else torch.float32
+        else:
+            whisper_dtype = torch.float16 if fp16 else torch.float32
+        whisper_model = WhisperModel.from_pretrained(whisper_name, torch_dtype=whisper_dtype).to(device)
         del whisper_model.decoder
         whisper_feature_extractor = AutoFeatureExtractor.from_pretrained(whisper_name)
 
@@ -146,8 +164,23 @@ def load_models(args):
             ori_input_features = whisper_model._mask_input_features(
                 ori_inputs.input_features, attention_mask=ori_inputs.attention_mask).to(device)
             with torch.no_grad():
+                # 确保输入数据类型与模型兼容，避免CPU/MPS设备上的LayerNorm错误
+                if device.type == "cpu":
+                    # CPU设备可以尝试使用模型的数据类型，但如果出现问题则回退到float32
+                    try:
+                        encoder_input = ori_input_features.to(whisper_model.encoder.dtype)
+                    except:
+                        encoder_input = ori_input_features.to(torch.float32)
+                elif device.type == "mps":
+                    # MPS设备可以尝试使用模型的数据类型，但如果出现问题则回退到float32
+                    try:
+                        encoder_input = ori_input_features.to(whisper_model.encoder.dtype)
+                    except:
+                        encoder_input = ori_input_features.to(torch.float32)
+                else:
+                    encoder_input = ori_input_features.to(whisper_model.encoder.dtype)
                 ori_outputs = whisper_model.encoder(
-                    ori_input_features.to(whisper_model.encoder.dtype),
+                    encoder_input,
                     head_mask=None,
                     output_attentions=False,
                     output_hidden_states=False,
@@ -166,7 +199,9 @@ def load_models(args):
         hubert_model = HubertModel.from_pretrained(hubert_model_name)
         hubert_model = hubert_model.to(device)
         hubert_model = hubert_model.eval()
-        hubert_model = hubert_model.half()
+        # 根据fp16参数决定是否使用half精度
+        if fp16:
+            hubert_model = hubert_model.half()
 
         def semantic_fn(waves_16k):
             ori_waves_16k_input_list = [
@@ -179,8 +214,13 @@ def load_models(args):
                                                   padding=True,
                                                   sampling_rate=16000).to(device)
             with torch.no_grad():
+                # 根据fp16参数决定是否使用half精度
+                if fp16:
+                    input_values = ori_inputs.input_values.half()
+                else:
+                    input_values = ori_inputs.input_values
                 ori_outputs = hubert_model(
-                    ori_inputs.input_values.half(),
+                    input_values,
                 )
             S_ori = ori_outputs.last_hidden_state.float()
             return S_ori
@@ -196,7 +236,9 @@ def load_models(args):
         wav2vec_model.encoder.layers = wav2vec_model.encoder.layers[:output_layer]
         wav2vec_model = wav2vec_model.to(device)
         wav2vec_model = wav2vec_model.eval()
-        wav2vec_model = wav2vec_model.half()
+        # 根据fp16参数决定是否使用half精度
+        if fp16:
+            wav2vec_model = wav2vec_model.half()
 
         def semantic_fn(waves_16k):
             ori_waves_16k_input_list = [
@@ -209,8 +251,13 @@ def load_models(args):
                                                    padding=True,
                                                    sampling_rate=16000).to(device)
             with torch.no_grad():
+                # 根据fp16参数决定是否使用half精度
+                if fp16:
+                    input_values = ori_inputs.input_values.half()
+                else:
+                    input_values = ori_inputs.input_values
                 ori_outputs = wav2vec_model(
-                    ori_inputs.input_values.half(),
+                    input_values,
                 )
             S_ori = ori_outputs.last_hidden_state.float()
             return S_ori
@@ -545,12 +592,13 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=str, default="./examples/eval/converted/")
     parser.add_argument("--diffusion-steps", type=int, default=30)
     parser.add_argument("--length-adjust", type=float, default=1.0)
-    parser.add_argument("--inference-cfg-rate", type=float, default=0.7)
+    parser.add_argument("--inference-cfg-rate", type=float, default=1.0)
     parser.add_argument(
         "--xvector-extractor", type=str, default="wavlm-large"
     )  # wavlm or resemblyzer
     parser.add_argument("--baseline", type=str, default="") # use "" for Seed-VC
     parser.add_argument("--max-samples", type=int, default=20)
     parser.add_argument("--remove-prompt", type=bool, default=False)
+    parser.add_argument("--fp16", action="store_true", help="Use fp16 precision")
     args = parser.parse_args()
     main(args)
