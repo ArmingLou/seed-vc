@@ -937,7 +937,7 @@ def copy_final_models(log_dir, run_name, train_cfm=False, train_ar=False, config
         config_file = os.path.join(log_dir, os.path.basename(config_path))
         if os.path.exists(config_file):
             shutil.copy2(config_file, os.path.join(base_log_dir, os.path.basename(config_path)))
-            print(f"已将配置文件拷贝到: {os.path.join(base_log_dir, 'final_ar_model.pth')}")
+            print(f"已将配置文件拷贝到: {os.path.join(base_log_dir, os.path.basename(config_path))}")
 
 def main(args):
     # 如果config参数为空，则使用默认值

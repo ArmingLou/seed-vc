@@ -27,8 +27,8 @@ cfm:
     content_dim: 512
     style_encoder_dim: 192
     class_dropout_prob: 0.1
-    dropout_rate: 0.0
-    attn_dropout_rate: 0.0
+    dropout_rate: 0.1
+    attn_dropout_rate: 0.1
 cfm_length_regulator:
   _target_: modules.v2.length_regulator.InterpolateRegulator
   channels: 512
@@ -42,7 +42,7 @@ ar:
     _target_: modules.v2.ar.NaiveTransformer
     config:
       _target_: modules.v2.ar.NaiveModelArgs
-      dropout: 0.0
+      dropout: 0.1
       rope_base: 10000.0
       dim: 768
       head_dim: 64
