@@ -104,7 +104,8 @@ class MinLRExponentialLR(torch.optim.lr_scheduler.ExponentialLR):
         lrs = super().get_lr()
         return [max(lr, self.min_lr) for lr in lrs]
 
-def build_single_optimizer(model, lr,):
+def build_single_optimizer(model, lr, warmup_steps=1000, max_steps=10000, min_lr=1e-7):
+    """构建优化器和学习率调度器（预热+余弦退火）"""
     model_parameters = model.parameters()
     parameters_require_grad = filter(lambda p: p.requires_grad, model_parameters)
     optim = AdamW(
@@ -115,6 +116,24 @@ def build_single_optimizer(model, lr,):
         weight_decay=0.01,
     )
 
-    scheduler = MinLRExponentialLR(optim, gamma=0.999996, min_lr=1e-5)
+    # 创建预热调度器
+    warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(
+        optim,
+        lr_lambda=lambda step: min(1.0, float(step + 1) / float(warmup_steps)) if step < warmup_steps else 1.0
+    )
+    
+    # 创建余弦退火调度器
+    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optim,
+        T_max=max_steps - warmup_steps,
+        eta_min=min_lr
+    )
+    
+    # 使用SequentialLR组合预热和余弦退火
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optim,
+        schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[warmup_steps]
+    )
 
     return optim, scheduler

@@ -2,17 +2,27 @@ import gradio as gr
 import torch
 import yaml
 import argparse
+import os
 from modules.commons import str2bool
 
+# 设置 MPS 回退到 CPU 的环境变量
+os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+
 # Set up device and torch configurations
-if torch.cuda.is_available():
+# 根据环境变量决定是否强制使用 CPU
+if os.environ.get("FORCE_CPU", "0") == "1":
+    device = torch.device("cpu")
+    dtype = torch.float32
+elif torch.cuda.is_available():
     device = torch.device("cuda")
+    dtype = torch.float16
 elif torch.backends.mps.is_available():
     device = torch.device("mps")
+    # MPS 不支持 bfloat16，使用 float32
+    dtype = torch.float32
 else:
     device = torch.device("cpu")
-
-dtype = torch.float16
+    dtype = torch.float32
 
 # Global variables to store model instances
 vc_wrapper_v1 = None
@@ -25,6 +35,25 @@ def load_v2_models(args):
     cfg = DictConfig(yaml.safe_load(open("configs/v2/vc_wrapper.yaml", "r")))
     vc_wrapper = instantiate(cfg)
     vc_wrapper.load_checkpoints()
+    
+    # 在将模型移动到设备之前，确保所有参数和缓冲区都使用正确的数据类型
+    if device.type == "mps":
+        # 遍历模型的所有模块，确保参数和缓冲区使用正确的数据类型
+        for module in vc_wrapper.modules():
+            # 处理参数
+            for name, param in module.named_parameters(recurse=False):
+                if param.dtype == torch.bfloat16:
+                    # 将 BFloat16 参数转换为 Float32
+                    new_param = torch.nn.Parameter(param.data.to(torch.float32), requires_grad=param.requires_grad)
+                    setattr(module, name, new_param)
+            
+            # 处理缓冲区
+            for name, buffer in module.named_buffers(recurse=False):
+                if buffer.dtype == torch.bfloat16:
+                    # 将 BFloat16 缓冲区转换为 Float32
+                    new_buffer = buffer.data.to(torch.float32)
+                    module.register_buffer(name, new_buffer)
+    
     vc_wrapper.to(device)
     vc_wrapper.eval()
 
@@ -54,7 +83,9 @@ def convert_voice_v1_wrapper(source_audio_path, target_audio_path, diffusion_ste
     global vc_wrapper_v1
     from seed_vc_wrapper import SeedVCWrapper
     if vc_wrapper_v1 is None:
-        vc_wrapper_v1 = SeedVCWrapper()
+        # 根据dtype确定是否使用fp16
+        fp16 = (dtype == torch.float16)
+        vc_wrapper_v1 = SeedVCWrapper(fp16=fp16)
 
     # Use yield from to properly handle the generator
     yield from vc_wrapper_v1.convert_voice(

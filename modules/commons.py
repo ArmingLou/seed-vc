@@ -455,10 +455,22 @@ def load_checkpoint(
     _ = [model[key].eval() for key in model]
 
     if not load_only_params:
-        epoch = state["epoch"] + 1
-        iters = state["iters"]
-        optimizer.load_state_dict(state["optimizer"])
-        optimizer.load_scheduler_state_dict(state["scheduler"])
+        # Check if required keys exist in state dict
+        if "epoch" in state and "iters" in state and "optimizer" in state and "scheduler" in state:
+            epoch = state["epoch"]
+            iters = state["iters"]
+            optimizer.load_state_dict(state["optimizer"])
+            optimizer.load_scheduler_state_dict(state["scheduler"])
+        else:
+            print("Warning: Some keys missing in checkpoint, using default values")
+            epoch = 0
+            iters = 0
+            # Load available parts
+            if "optimizer" in state:
+                optimizer.load_state_dict(state["optimizer"])
+            if "scheduler" in state:
+                optimizer.load_scheduler_state_dict(state["scheduler"])
+
 
     else:
         epoch = 0

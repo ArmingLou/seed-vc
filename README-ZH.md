@@ -149,11 +149,52 @@ where:
 - `save-every` 保存模型检查点的步数
 - `num-workers` 数据加载的工作线程数量，建议 Windows 上设置为 0
 
+### 高级训练选项
+
+对于更高级的训练场景，您可以使用以下附加选项：
+
+- `--val-dataset-dir` 或 `--val-dir`：验证数据集目录路径，用于监控模型性能
+- `--patience` 或 `-p`：早停耐心值（默认：20）
+- `--validation-interval` 或 `-v`：验证间隔（步数，默认：50）
+- `--fp16`：启用 FP16 精度训练，加快训练速度并减少内存使用
+
+带验证和早停的示例：
+```bash
+python train.py 
+--config <path-to-config> 
+--dataset-dir <path-to-data>
+--run-name <run-name>
+--batch-size 2
+--max-steps 1000
+--max-epochs 1000
+--save-every 500
+--num-workers 0
+--val-dataset-dir <path-to-validation-data>
+--patience 20
+--validation-interval 50
+--fp16
+```
+
 4. 如果需要从上次停止的地方继续训练，只需运行同样的命令即可。通过传入相同的 `run-name` 和 `config` 参数，程序将能够找到上次训练的检查点和日志。
+
+为了更方便地管理训练，您也可以使用 `train.sh` 脚本，它提供了交互模式和简化的命令行界面：
+
+```bash
+# 交互模式
+./train.sh --interactive
+
+# 直接训练
+./train.sh --v1 --gpu --dataset-dir <path-to-data> --run-name <run-name>
+
+# 带验证和早停训练
+./train.sh --v1 --gpu --dataset-dir <path-to-data> --run-name <run-name> --val-dataset-dir <path-to-validation-data> --patience 20 --validation-interval 50
+```
 
 5. 训练完成后，您可以通过指定检查点和配置文件的路径来进行推理。
     - 它们应位于 `./runs/<run-name>/` 下，检查点命名为 `ft_model.pth`，配置文件名称与训练配置文件相同。
     - 在推理时，您仍需指定要使用的说话人的参考音频文件，类似于零样本推理。
+
+有关包括增量训练、验证集、早停机制和 FP16 精度在内的高级训练技术的详细说明，请参阅[训练指南](TRAINING_GUIDE.md)。
 
 ## TODO📝
 - [x] 发布代码

@@ -1,22 +1,56 @@
 import gradio as gr
 import torch
 import yaml
+import os
+from modules.commons import str2bool
 
-if torch.cuda.is_available():
-    device = torch.device("cuda")
-elif torch.backends.mps.is_available():
-    device = torch.device("mps")
-else:
-    device = torch.device("cpu")
+# 初始化全局变量
+fp16 = False
+device = None
+dtype = torch.float32
+vc_wrapper = None
 
-dtype = torch.float16
 def load_models(args):
+    global fp16, dtype
     from hydra.utils import instantiate
     from omegaconf import DictConfig
-    cfg = DictConfig(yaml.safe_load(open("configs/v2/vc_wrapper.yaml", "r")))
+    
+    # 更新全局fp16标志
+    fp16 = args.fp16
+    print(f"Using device: {device}")
+    print(f"Using fp16: {fp16}")
+    
+    # 根据fp16参数决定数据类型
+    dtype = torch.float16 if fp16 else torch.float32
+    
+    # 自动切换fp16逻辑
+    # 仅在需要时打印警告信息
+    if (device.type == "cpu" or device.type == "mps") and fp16:
+        print(f"Warning: fp16 is enabled for {device.type} device, which may cause issues")
+    
+    # 使用传入的配置文件路径，如果没有指定则使用默认路径
+    config_path = args.config if hasattr(args, 'config') and args.config else "configs/v2/vc_wrapper.yaml"
+    cfg = DictConfig(yaml.safe_load(open(config_path, "r")))
     vc_wrapper = instantiate(cfg)
-    vc_wrapper.load_checkpoints(ar_checkpoint_path=args.ar_checkpoint_path,
-                                cfm_checkpoint_path=args.cfm_checkpoint_path)
+    
+    # 根据fp16参数决定加载模型时的数据类型
+    model_dtype = torch.float16 if fp16 else torch.float32
+    print(f"正在尝试使用{model_dtype}精度加载V2模型到{device}设备...")
+    
+    try:
+        vc_wrapper.load_checkpoints(ar_checkpoint_path=args.ar_checkpoint_path,
+                                   cfm_checkpoint_path=args.cfm_checkpoint_path)
+    except Exception as e:
+        print(f"警告: 在{device}设备上无法使用{model_dtype}精度加载V2模型: {e}")
+        print(f"正在回退到float32精度加载V2模型...")
+        fp16 = False
+        dtype = torch.float32
+        model_dtype = torch.float32
+        vc_wrapper.load_checkpoints(ar_checkpoint_path=args.ar_checkpoint_path,
+                                   cfm_checkpoint_path=args.cfm_checkpoint_path)
+        print(f"信息: 已将内部fp16标志设置为False，以保持一致性")
+        print(f"V2模型已加载到{device}设备，使用float32数据类型")
+    
     vc_wrapper.to(device)
     vc_wrapper.eval()
 
@@ -34,8 +68,79 @@ def load_models(args):
 
     return vc_wrapper
 
+# 重新加载模型为float32精度的函数
+def reload_v2_model(vc_wrapper, args):
+    """重新加载V2模型为float32精度"""
+    global fp16, dtype
+    fp16 = False
+    dtype = torch.float32
+    print(f"信息: 已将内部fp16标志设置为False，以保持一致性")
+    
+    # 重新加载模型为float32精度
+    model_dtype = torch.float32
+    vc_wrapper.load_checkpoints(ar_checkpoint_path=args.ar_checkpoint_path,
+                               cfm_checkpoint_path=args.cfm_checkpoint_path)
+    vc_wrapper.to(device)
+    vc_wrapper.eval()
+    vc_wrapper.setup_ar_caches(max_batch_size=1, max_seq_len=4096, dtype=dtype, device=device)
+    
+    print(f"信息: 已成功回退到float32精度并重新加载模型")
+    return vc_wrapper
+
 def main(args):
+    global vc_wrapper
     vc_wrapper = load_models(args)
+    
+    # 创建一个包装函数，传递正确的设备和数据类型参数，并处理生成器返回值
+    def convert_voice_with_streaming_wrapper(source_audio_path, target_audio_path, diffusion_steps=30,
+                                           length_adjust=1.0, intelligebility_cfg_rate=0.7, similarity_cfg_rate=0.7,
+                                           top_p=0.7, temperature=0.7, repetition_penalty=1.5,
+                                           convert_style=False, anonymization_only=False):
+        global vc_wrapper
+        try:
+            # 调用生成器函数并收集所有输出
+            generator = vc_wrapper.convert_voice_with_streaming(
+                source_audio_path, target_audio_path, diffusion_steps,
+                length_adjust, intelligebility_cfg_rate, similarity_cfg_rate,
+                top_p, temperature, repetition_penalty,
+                convert_style, anonymization_only,
+                device=device, dtype=dtype, stream_output=True
+            )
+            
+            # 收集生成器的所有输出，返回最后一个完整的音频
+            mp3_bytes = None
+            full_audio = None
+            for mp3_bytes, full_audio in generator:
+                pass  # 我们只关心最后一个值
+            
+            # 返回两个值：流式输出和完整输出
+            return mp3_bytes, full_audio
+        except RuntimeError as e:
+            if "LayerNormKernelImpl" in str(e) and device.type == "cpu" and fp16:
+                print(f"警告: 在CPU设备上使用fp16时遇到LayerNorm错误，正在回退到float32精度...")
+                # 回退到float32精度重新加载模型
+                vc_wrapper = reload_v2_model(vc_wrapper, args)
+                # 重新执行推理
+                generator = vc_wrapper.convert_voice_with_streaming(
+                    source_audio_path, target_audio_path, diffusion_steps,
+                    length_adjust, intelligebility_cfg_rate, similarity_cfg_rate,
+                    top_p, temperature, repetition_penalty,
+                    convert_style, anonymization_only,
+                    device=device, dtype=dtype, stream_output=True
+                )
+                
+                # 收集生成器的所有输出，返回最后一个完整的音频
+                mp3_bytes = None
+                full_audio = None
+                for mp3_bytes, full_audio in generator:
+                    pass  # 我们只关心最后一个值
+                
+                print(f"信息: 已成功回退到float32精度并重新执行推理")
+                # 返回两个值：流式输出和完整输出
+                return mp3_bytes, full_audio
+            else:
+                # 如果不是预期的LayerNorm错误，则重新抛出异常
+                raise e
     
     # Set up Gradio interface
     description = ("Zero-shot voice conversion with in-context learning. For local deployment please check [GitHub repository](https://github.com/Plachtaa/seed-vc) "
@@ -77,7 +182,7 @@ def main(args):
     
     # Launch the Gradio interface
     gr.Interface(
-        fn=vc_wrapper.convert_voice_with_streaming,
+        fn=convert_voice_with_streaming_wrapper,  # 使用包装函数
         description=description,
         inputs=inputs,
         outputs=outputs,
@@ -90,10 +195,24 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--compile", action="store_true", help="Compile the model using torch.compile")
+    parser.add_argument("--config", type=str, default="configs/v2/vc_wrapper.yaml",
+                        help="Path to the configuration file")
+    parser.add_argument("--fp16", type=str2bool, nargs="?", const=True, help="Whether to use fp16", default=False)
     # V2 custom checkpoints
     parser.add_argument("--ar-checkpoint-path", type=str, default=None,
                         help="Path to custom checkpoint file")
     parser.add_argument("--cfm-checkpoint-path", type=str, default=None,
                         help="Path to custom checkpoint file")
     args = parser.parse_args()
+    
+    # 根据环境变量决定是否强制使用 CPU
+    if os.environ.get("FORCE_CPU", "0") == "1":
+        device = torch.device("cpu")
+    elif torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+    
     main(args)

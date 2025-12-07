@@ -74,10 +74,24 @@ class TDNNLayer(nn.Module):
                                 dilation=dilation,
                                 bias=bias)
         self.nonlinear = get_nonlinear(config_str, out_channels)
+        # 保存配置字符串，用于在forward中判断是否包含batchnorm
+        self.config_str = config_str
 
     def forward(self, x):
         x = self.linear(x)
-        x = self.nonlinear(x)
+        # 检查是否包含batchnorm且批量大小为1
+        if 'batchnorm' in self.config_str and x.size(0) == 1:
+            # 对于批量大小为1的情况，暂时切换到评估模式
+            # 保存原始训练状态
+            was_training = self.training
+            if was_training:
+                self.eval()
+            x = self.nonlinear(x)
+            # 恢复原始训练状态
+            if was_training:
+                self.train()
+        else:
+            x = self.nonlinear(x)
         return x
 
 
@@ -219,13 +233,28 @@ class DenseLayer(nn.Module):
         super(DenseLayer, self).__init__()
         self.linear = nn.Conv1d(in_channels, out_channels, 1, bias=bias)
         self.nonlinear = get_nonlinear(config_str, out_channels)
+        # 保存配置字符串，用于在forward中判断是否包含batchnorm
+        self.config_str = config_str
 
     def forward(self, x):
         if len(x.shape) == 2:
             x = self.linear(x.unsqueeze(dim=-1)).squeeze(dim=-1)
         else:
             x = self.linear(x)
-        x = self.nonlinear(x)
+        
+        # 检查是否包含batchnorm且批量大小为1
+        if 'batchnorm' in self.config_str and x.size(0) == 1:
+            # 对于批量大小为1的情况，暂时切换到评估模式
+            # 保存原始训练状态
+            was_training = self.training
+            if was_training:
+                self.eval()
+            x = self.nonlinear(x)
+            # 恢复原始训练状态
+            if was_training:
+                self.train()
+        else:
+            x = self.nonlinear(x)
         return x
 
 

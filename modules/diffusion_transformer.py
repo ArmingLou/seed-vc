@@ -487,7 +487,7 @@ class DiT(torch.nn.Module):
         class_dropout = False
         if self.training and torch.rand(1) < self.class_dropout_prob:
             class_dropout = True
-        if not self.training and mask_content:
+        if not self.training and isinstance(mask_content, torch.Tensor) and mask_content.any():
             class_dropout = True
         # cond_in_module = self.cond_embedder if self.content_type == 'discrete' else self.cond_projection
         cond_in_module = self.cond_projection
