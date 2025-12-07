@@ -1,5 +1,6 @@
 import torch
 from transformers import AutoTokenizer, AutoModel, Wav2Vec2FeatureExtractor
+import os
 
 class AstralQuantizer(torch.nn.Module):
     def __init__(
@@ -15,17 +16,19 @@ class AstralQuantizer(torch.nn.Module):
         self.encoder = encoder
         self.quantizer = quantizer
         self.tokenizer_name = tokenizer_name
-        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        # 检查HF_HUB_OFFLINE环境变量来决定是否使用local_files_only参数
+        hf_offline = os.environ.get("HF_HUB_OFFLINE", "0") == "1"
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, local_files_only=hf_offline)
 
         # Load SSL model from Huggingface
         self.ssl_model_name = ssl_model_name
         self.ssl_output_layer = ssl_output_layer
-        self.ssl_feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(ssl_model_name)
+        self.ssl_feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(ssl_model_name, local_files_only=hf_offline)
 
         if skip_ssl:  # in case the same SSL model has been loaded somewhere else
             self.ssl_model = None
         else:
-            self.ssl_model = AutoModel.from_pretrained(ssl_model_name).eval()
+            self.ssl_model = AutoModel.from_pretrained(ssl_model_name, local_files_only=hf_offline).eval()
             self.ssl_model.encoder.layers = self.ssl_model.encoder.layers[:ssl_output_layer]
             self.ssl_model.encoder.layer_norm = torch.nn.Identity()
 
