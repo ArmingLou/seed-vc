@@ -13,6 +13,9 @@ os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 if os.environ.get("FORCE_CPU", "0") == "1":
     device = torch.device("cpu")
     dtype = torch.float32
+elif hasattr(torch, 'xpu') and torch.xpu.is_available():
+    device = torch.device("xpu")
+    dtype = torch.float16
 elif torch.cuda.is_available():
     device = torch.device("cuda")
     dtype = torch.float16

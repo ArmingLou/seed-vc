@@ -1255,6 +1255,8 @@ def main(args):
     
     if force_cpu:
         device_str = "cpu"
+    elif hasattr(torch, 'xpu') and torch.xpu.is_available():
+        device_str = "xpu"
     elif torch.backends.mps.is_available():
         device_str = "mps"
     else:

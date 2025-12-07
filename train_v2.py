@@ -129,6 +129,10 @@ class Trainer:
         
         # Check FORCE_CPU environment variable
         force_cpu = os.environ.get('FORCE_CPU', '0') == '1'
+        
+        # If XPU is available, override force_cpu setting
+        if hasattr(torch, 'xpu') and torch.xpu.is_available():
+            force_cpu = False
 
         # Load configuration
         self.config = yaml.safe_load(open(config_path))

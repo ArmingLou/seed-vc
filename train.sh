@@ -913,14 +913,44 @@ else
             $V2_TRAIN_ARGS
     else
         export FORCE_CPU=0
-        accelerate launch $V2_SCRIPT $CONFIG_PARAM \
-            --dataset-dir $DATASET_DIR \
-            --run-name $RUN_NAME \
-            --batch-size 4 \
-            --max-steps $MAX_STEPS \
-            --max-epochs $MAX_EPOCHS \
-            --save-every $SAVE_EVERY \
-            --num-workers 0 \
-            $V2_TRAIN_ARGS
+        # 检查是否有Intel GPU可用
+        if python -c "import torch; exit(0 if hasattr(torch, 'xpu') and torch.xpu.is_available() else 1)"; then
+            # 使用Intel GPU运行
+            accelerate launch $V2_SCRIPT $CONFIG_PARAM \
+                --dataset-dir $DATASET_DIR \
+                --run-name $RUN_NAME \
+                --batch-size 4 \
+                --max-steps $MAX_STEPS \
+                --max-epochs $MAX_EPOCHS \
+                --save-every $SAVE_EVERY \
+                --num-workers 0 \
+                $V2_TRAIN_ARGS
+        else
+            # 检查是否有NVIDIA GPU可用
+            if nvidia-smi &> /dev/null; then
+                # 使用NVIDIA GPU运行
+                accelerate launch $V2_SCRIPT $CONFIG_PARAM \
+                    --dataset-dir $DATASET_DIR \
+                    --run-name $RUN_NAME \
+                    --batch-size 4 \
+                    --max-steps $MAX_STEPS \
+                    --max-epochs $MAX_EPOCHS \
+                    --save-every $SAVE_EVERY \
+                    --num-workers 0 \
+                    $V2_TRAIN_ARGS
+            else
+                # 回退到CPU运行
+                export FORCE_CPU=1
+                python $V2_SCRIPT $CONFIG_PARAM \
+                    --dataset-dir $DATASET_DIR \
+                    --run-name $RUN_NAME \
+                    --batch-size 4 \
+                    --max-steps $MAX_STEPS \
+                    --max-epochs $MAX_EPOCHS \
+                    --save-every $SAVE_EVERY \
+                    --num-workers 1 \
+                    $V2_TRAIN_ARGS
+            fi
+        fi
     fi
 fi

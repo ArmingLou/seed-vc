@@ -394,13 +394,25 @@ export HF_HUB_OFFLINE=0
 # export HUGGING_FACE_HUB_TOKEN={从https://huggingface.co/settings/tokens获取}
 export HUGGING_FACE_HUB_TOKEN=
 
-# 如果未指定 --gpu 或运行 V2 版本，则强制使用 CPU
+# 检查设备可用性并设置FORCE_CPU环境变量
 if [ "$USE_CPU" = false ]; then
-    export FORCE_CPU=0
-    echo "设置 FORCE_CPU=0"
+    # 检查是否有Intel GPU可用
+    if python -c "import torch; exit(0 if hasattr(torch, 'xpu') and torch.xpu.is_available() else 1)"; then
+        export FORCE_CPU=0
+        echo "检测到Intel GPU，设置 FORCE_CPU=0"
+    else
+        # 检查是否有NVIDIA GPU可用
+        if nvidia-smi &> /dev/null; then
+            export FORCE_CPU=0
+            echo "检测到NVIDIA GPU，设置 FORCE_CPU=0"
+        else
+            export FORCE_CPU=1
+            echo "未检测到GPU，回退到CPU模式，设置 FORCE_CPU=1"
+        fi
+    fi
 else
     export FORCE_CPU=1
-    echo "设置 FORCE_CPU=1"
+    echo "用户指定使用CPU，设置 FORCE_CPU=1"
 fi
 
 # 构建命令参数

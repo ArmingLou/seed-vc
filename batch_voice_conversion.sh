@@ -822,13 +822,25 @@ echo "3. BigVGAN模型: https://huggingface.co/nvidia/bigvgan_v2_22khz_80band_25
 echo "下载后将文件放置在正确的缓存目录中。"
 echo ""
 
-# 设置FORCE_CPU环境变量来强制使用CPU
+# 检查设备可用性并设置FORCE_CPU环境变量
 if [[ "$USE_CPU" = true ]]; then
     export FORCE_CPU=1
-    echo "使用 CPU 运行"
+    echo "用户指定使用CPU，设置 FORCE_CPU=1"
 else
-    export FORCE_CPU=0
-    echo "使用 GPU 运行 (如果可用)"
+    # 检查是否有Intel GPU可用
+    if python -c "import torch; exit(0 if hasattr(torch, 'xpu') and torch.xpu.is_available() else 1)"; then
+        export FORCE_CPU=0
+        echo "检测到Intel GPU，设置 FORCE_CPU=0"
+    else
+        # 检查是否有NVIDIA GPU可用
+        if nvidia-smi &> /dev/null; then
+            export FORCE_CPU=0
+            echo "检测到NVIDIA GPU，设置 FORCE_CPU=0"
+        else
+            export FORCE_CPU=1
+            echo "未检测到GPU，回退到CPU模式，设置 FORCE_CPU=1"
+        fi
+    fi
 fi
 
 # 设置FORCE_CPU环境变量来强制使用CPU

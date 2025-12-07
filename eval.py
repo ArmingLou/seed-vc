@@ -30,6 +30,8 @@ from resemblyzer import preprocess_wav, VoiceEncoder
 # 根据环境变量决定是否强制使用 CPU
 if os.environ.get("FORCE_CPU", "0") == "1":
     device = torch.device("cpu")
+elif hasattr(torch, 'xpu') and torch.xpu.is_available():
+    device = torch.device("xpu")
 elif torch.cuda.is_available():
     device = torch.device("cuda")
 elif torch.backends.mps.is_available():
