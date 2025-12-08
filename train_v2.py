@@ -721,6 +721,7 @@ class Trainer:
                                 self.should_stop = True
                                 # 训练完成，设置标志位
                                 self.training_completed = True
+                                self._save_checkpoint(self.epoch)
                                 # 不再在早停时强制保存最佳模型，因为在训练过程中已经保存过了
                                 # self._save_best_model()
                                 return
@@ -973,20 +974,34 @@ def copy_final_models(log_dir, run_name, train_cfm=False, train_ar=False, config
     os.makedirs(base_log_dir, exist_ok=True)
     
     # 拷贝CFM最终模型（如果训练了CFM模型）
+    # 优先使用最佳模型文件，如果没有则使用最新的检查点
     if train_cfm:
-        cfm_checkpoints = glob.glob(os.path.join(log_dir, 'CFM_epoch_*_step_*.pth'))
-        if cfm_checkpoints:
-            latest_cfm_checkpoint = max(cfm_checkpoints, key=lambda x: int(x.split('_')[-1].split('.')[0]))
-            shutil.copy2(latest_cfm_checkpoint, os.path.join(base_log_dir, 'final_cfm_model.pth'))
-            print(f"已将最终CFM模型拷贝到: {os.path.join(base_log_dir, 'final_cfm_model.pth')}")
+        # 检查是否存在最佳CFM模型
+        best_cfm_path = os.path.join(log_dir, 'cfm_best.pth')
+        if os.path.exists(best_cfm_path):
+            shutil.copy2(best_cfm_path, os.path.join(base_log_dir, 'final_cfm_model.pth'))
+            print(f"已将最佳CFM模型拷贝到: {os.path.join(base_log_dir, 'final_cfm_model.pth')}")
+        else:
+            cfm_checkpoints = glob.glob(os.path.join(log_dir, 'CFM_epoch_*_step_*.pth'))
+            if cfm_checkpoints:
+                latest_cfm_checkpoint = max(cfm_checkpoints, key=lambda x: int(x.split('_')[-1].split('.')[0]))
+                shutil.copy2(latest_cfm_checkpoint, os.path.join(base_log_dir, 'final_cfm_model.pth'))
+                print(f"已将最终CFM模型拷贝到: {os.path.join(base_log_dir, 'final_cfm_model.pth')}")
     
     # 拷贝AR最终模型（如果训练了AR模型）
+    # 优先使用最佳模型文件，如果没有则使用最新的检查点
     if train_ar:
-        ar_checkpoints = glob.glob(os.path.join(log_dir, 'AR_epoch_*_step_*.pth'))
-        if ar_checkpoints:
-            latest_ar_checkpoint = max(ar_checkpoints, key=lambda x: int(x.split('_')[-1].split('.')[0]))
-            shutil.copy2(latest_ar_checkpoint, os.path.join(base_log_dir, 'final_ar_model.pth'))
-            print(f"已将最终AR模型拷贝到: {os.path.join(base_log_dir, 'final_ar_model.pth')}")
+        # 检查是否存在最佳AR模型
+        best_ar_path = os.path.join(log_dir, 'ar_best.pth')
+        if os.path.exists(best_ar_path):
+            shutil.copy2(best_ar_path, os.path.join(base_log_dir, 'final_ar_model.pth'))
+            print(f"已将最佳AR模型拷贝到: {os.path.join(base_log_dir, 'final_ar_model.pth')}")
+        else:
+            ar_checkpoints = glob.glob(os.path.join(log_dir, 'AR_epoch_*_step_*.pth'))
+            if ar_checkpoints:
+                latest_ar_checkpoint = max(ar_checkpoints, key=lambda x: int(x.split('_')[-1].split('.')[0]))
+                shutil.copy2(latest_ar_checkpoint, os.path.join(base_log_dir, 'final_ar_model.pth'))
+                print(f"已将最终AR模型拷贝到: {os.path.join(base_log_dir, 'final_ar_model.pth')}")
     
     # 拷贝配置文件
     if config_path:

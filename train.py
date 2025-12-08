@@ -63,23 +63,13 @@ class ManualProgressiveTrainer:
         self.current_trainer.train()
         
         # 训练完成后，将ft_model.pth和配置文件拷贝到基础运行目录
-        base_log_dir = os.path.join(os.path.dirname(self.current_trainer.log_dir), self.run_name)
-        os.makedirs(base_log_dir, exist_ok=True)
-        
-        # 拷贝最终模型
-        final_checkpoint = os.path.join(self.current_trainer.log_dir, 'ft_model.pth')
-        if os.path.exists(final_checkpoint):
-            shutil.copy2(final_checkpoint, os.path.join(base_log_dir, 'ft_model.pth'))
-            print(f"已将最终模型拷贝到: {os.path.join(base_log_dir, 'ft_model.pth')}")
-        
-        # 拷贝配置文件
-        config_file = os.path.join(self.current_trainer.log_dir, os.path.basename(self.config_path))
-        if os.path.exists(config_file):
-            shutil.copy2(config_file, os.path.join(base_log_dir, os.path.basename(self.config_path)))
-            print(f"已将配置文件拷贝到: {os.path.join(base_log_dir, os.path.basename(self.config_path))}")
-        
-        print(f"数据集训练完成。最终模型: {final_checkpoint}")
-        return final_checkpoint
+        # 使用与V2版本一致的归档逻辑
+        copy_final_models(self.current_trainer.log_dir, self.run_name, self.config_path, self.current_trainer.should_copy)
+                
+        # 返回最终模型路径
+        final_model_path = os.path.join(os.path.dirname(self.current_trainer.log_dir), self.run_name, 'ft_model.pth')
+        print(f"数据集训练完成。最终模型: {final_model_path}")
+        return final_model_path
 
 
 class Trainer:
@@ -108,6 +98,7 @@ class Trainer:
         self.device = torch.device(device)
         self.fp16 = fp16
         config = yaml.safe_load(open(config_path))
+        # 使用传入的run_name，不再添加数据集名称后缀，因为在调用处已经处理过了
         self.log_dir = os.path.join(config['log_dir'], run_name)
         os.makedirs(self.log_dir, exist_ok=True)
         # copy config file to log dir
@@ -1090,6 +1081,40 @@ class Trainer:
         torch.save(state, save_path)
         print(f"Best model saved at {save_path}")
 
+    def _save_checkpoint(self):
+        print('Saving..')
+        # Save with the epoch index (0-based indexing)
+        # According to the specification, we save first, then increment self.epoch
+        save_epoch = self.epoch
+        # After saving, increment epoch for next iteration
+        # Note: This increment is moved here to comply with the specification
+        # that says to save first, then increment self.epoch
+        
+        state = {
+            'net': {key: self.model[key].state_dict() for key in self.model},
+            'optimizer': self.optimizer.state_dict(),
+            'scheduler': self.optimizer.scheduler_state_dict(),
+            'iters': self.iters,
+            'epoch': save_epoch,
+            'best_val_loss': self.best_val_loss,
+            'patience_counter': self.patience_counter,
+            'ema_loss': self.ema_loss,
+            'best_train_loss': self.best_train_loss,
+            'current_lr': self.optimizer.optimizers['cfm'].param_groups[0]['lr'],  # 保存当前学习率
+        }
+        save_path = os.path.join(
+            self.log_dir,
+            f'DiT_epoch_{save_epoch:05d}_step_{self.iters:05d}.pth'
+        )
+        torch.save(state, save_path)
+
+        # find all checkpoints and remove old ones
+        checkpoints = glob.glob(os.path.join(self.log_dir, 'DiT_epoch_*.pth'))
+        if len(checkpoints) > 2:
+            checkpoints.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
+            for cp in checkpoints[:-2]:
+                os.remove(cp)
+
     def train_one_epoch(self):
         # self.epoch represents the epoch index (0-based)
         # For logging, we use the same value
@@ -1153,6 +1178,7 @@ class Trainer:
                             print(f"Early stopping triggered at step {self.iters}")
                             self.should_stop = True
                             self.should_copy = True
+                            self._save_checkpoint()
                             return
                     
                     # 在预热阶段结束后，根据验证损失情况决定是否手动调整学习率
@@ -1177,44 +1203,16 @@ class Trainer:
                             new_lr = self.optimizer.optimizers['cfm'].param_groups[0]['lr']
                             print(f"Learning rate remains at 《{new_lr:.2e}》 (cosine annealing phase - validation loss monitoring)")
 
-            if self.iters % self.save_interval == 0 or self.iters >= self.max_steps:
-                print('Saving..')
-                # Save with the epoch index (0-based indexing)
-                # According to the specification, we save first, then increment self.epoch
-                save_epoch = self.epoch
-                # After saving, increment epoch for next iteration
-                # Note: This increment is moved here to comply with the specification
-                # that says to save first, then increment self.epoch
-                
-                state = {
-                    'net': {key: self.model[key].state_dict() for key in self.model},
-                    'optimizer': self.optimizer.state_dict(),
-                    'scheduler': self.optimizer.scheduler_state_dict(),
-                    'iters': self.iters,
-                    'epoch': save_epoch,
-                    'best_val_loss': self.best_val_loss,
-                    'patience_counter': self.patience_counter,
-                    'ema_loss': self.ema_loss,
-                    'best_train_loss': self.best_train_loss,
-                    'current_lr': self.optimizer.optimizers['cfm'].param_groups[0]['lr'],  # 保存当前学习率
-                }
-                save_path = os.path.join(
-                    self.log_dir,
-                    f'DiT_epoch_{save_epoch:05d}_step_{self.iters:05d}.pth'
-                )
-                torch.save(state, save_path)
-
-                # find all checkpoints and remove old ones
-                checkpoints = glob.glob(os.path.join(self.log_dir, 'DiT_epoch_*.pth'))
-                if len(checkpoints) > 2:
-                    checkpoints.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
-                    for cp in checkpoints[:-2]:
-                        os.remove(cp)
             if self.iters >= self.max_steps:
                 self.should_copy = False
                 self.should_stop = True
                 print("Reached max steps, stopping training")
+                self._save_checkpoint()
                 return # 不归档，只保存检查点。
+                
+            if self.iters % self.save_interval == 0 or self.iters >= self.max_steps:
+                self._save_checkpoint()
+            
             # 检查是否应该早停
             if self.should_stop:
                 break
@@ -1251,27 +1249,36 @@ class Trainer:
             if self.should_stop:
                 break
 
-        # 不再在训练结束时强制保存最佳模型，因为在训练过程中已经保存过了
-        # self._save_best_model()
-        
-        if self.should_copy:
-            print('Saving final model..')
-            state = {
-                'net': {key: self.model[key].state_dict() for key in self.model},
-                'optimizer': self.optimizer.state_dict(),
-                'scheduler': self.optimizer.scheduler_state_dict(),
-                'iters': self.iters,
-                'epoch': self.epoch,
-                'best_val_loss': self.best_val_loss,
-                'patience_counter': self.patience_counter,
-                'ema_loss': self.ema_loss,
-                'best_train_loss': self.best_train_loss,
-                'current_lr': self.optimizer.optimizers['cfm'].param_groups[0]['lr'],  # 保存当前学习率
-            }
-            os.makedirs(self.log_dir, exist_ok=True)
-            save_path = os.path.join(self.log_dir, 'ft_model.pth')
-            torch.save(state, save_path)
-            print(f"Final model saved at {save_path}")
+
+def copy_final_models(log_dir, run_name, config_path=None, training_completed=False):
+    """共用的文件拷贝函数，用于将最终模型和配置文件拷贝到基础运行目录"""
+    # 只有在训练完成时才拷贝最终模型文件
+    if not training_completed:
+        return
+    # 保持与V2版本一致的归档逻辑
+    base_log_dir = os.path.join(os.path.dirname(log_dir), run_name)
+    os.makedirs(base_log_dir, exist_ok=True)
+    
+    # 拷贝最终模型
+    # 优先使用最佳模型文件，如果没有则使用最新的检查点
+    best_model_path = os.path.join(log_dir, 'best_model.pth')
+    if os.path.exists(best_model_path):
+        shutil.copy2(best_model_path, os.path.join(base_log_dir, 'ft_model.pth'))
+        print(f"已将最佳模型拷贝到: {os.path.join(base_log_dir, 'ft_model.pth')}")
+    else:
+        # 查找最新的检查点文件
+        checkpoints = glob.glob(os.path.join(log_dir, 'DiT_epoch_*_step_*.pth'))
+        if checkpoints:
+            latest_checkpoint = max(checkpoints, key=lambda x: int(x.split('_')[-1].split('.')[0]))
+            shutil.copy2(latest_checkpoint, os.path.join(base_log_dir, 'ft_model.pth'))
+            print(f"已将最终模型拷贝到: {os.path.join(base_log_dir, 'ft_model.pth')}")
+    
+    # 拷贝配置文件
+    if config_path:
+        config_file = os.path.join(log_dir, os.path.basename(config_path))
+        if os.path.exists(config_file):
+            shutil.copy2(config_file, os.path.join(base_log_dir, os.path.basename(config_path)))
+            print(f"已将配置文件拷贝到: {os.path.join(base_log_dir, os.path.basename(config_path))}")
 
 
 def main(args):
@@ -1371,21 +1378,8 @@ def main(args):
         trainer.train()
         
         # 训练完成后，将ft_model.pth和配置文件拷贝到基础运行目录
-        # 保持与渐进式训练一致的归档逻辑
-        base_log_dir = os.path.join(os.path.dirname(trainer.log_dir), args.run_name)
-        os.makedirs(base_log_dir, exist_ok=True)
-        
-        # 拷贝最终模型
-        final_checkpoint = os.path.join(trainer.log_dir, 'ft_model.pth')
-        if os.path.exists(final_checkpoint):
-            shutil.copy2(final_checkpoint, os.path.join(base_log_dir, 'ft_model.pth'))
-            print(f"已将最终模型拷贝到: {os.path.join(base_log_dir, 'ft_model.pth')}")
-        
-        # 拷贝配置文件
-        config_file = os.path.join(trainer.log_dir, os.path.basename(args.config))
-        if os.path.exists(config_file):
-            shutil.copy2(config_file, os.path.join(base_log_dir, os.path.basename(args.config)))
-            print(f"已将配置文件拷贝到: {os.path.join(base_log_dir, os.path.basename(args.config))}")    
+        # 使用与V2版本一致的归档逻辑
+        copy_final_models(trainer.log_dir, args.run_name, args.config, trainer.should_copy)    
 if __name__ == '__main__':
     # Set multiprocessing start method to avoid 'Too many open files' error on macOS
     if sys.platform == 'darwin':  # macOS
