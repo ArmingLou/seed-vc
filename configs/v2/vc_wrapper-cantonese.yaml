@@ -35,7 +35,7 @@ cfm_length_regulator:
   is_discrete: true
   codebook_size: 2048
   sampling_ratios: [ 1, 1, 1, 1 ]
-  f0_condition: false
+  f0_condition: true
 ar:
   _target_: modules.v2.ar.NaiveWrapper
   model:
@@ -57,7 +57,7 @@ ar_length_regulator:
   is_discrete: true
   codebook_size: 32
   sampling_ratios: [ ]
-  f0_condition: false
+  f0_condition: true
 style_encoder:
   _target_: modules.campplus.DTDNN.CAMPPlus
   feat_dim: 80

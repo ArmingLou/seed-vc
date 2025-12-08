@@ -111,16 +111,16 @@ SAVE_EVERY=100
 TRAIN_CFM=false
 TRAIN_AR=false
 FP16=false  # 是否使用FP16，默认false
-PATIENCE=10
-VALIDATION_INTERVAL=10
+PATIENCE=25
+VALIDATION_INTERVAL=10 # validation_interval × patience × batch_size ≈ 样本数 × 5-10%
 DISTILL=false
 # V2版本的蒸馏参数
 DISTILL_AR=false
 DISTILL_CFM=false
 MIN_LR=1e-7
 LR_ADJUST_INTERVAL=10
-INITIAL_LR=4e-5
-WARMUP_STEPS=50
+INITIAL_LR=1e-5 # batch×2 → lr÷4 目前粤语如果batch size 8 。声调敏感学习率更低用1e-5
+WARMUP_STEPS=100 # batch×2 → steps÷2 总样本数的4%左右
 
 # 新增预训练模型检查点变量
 PRETRAINED_CKPT=""
@@ -804,7 +804,7 @@ if [ "$VERSION" = "v1" ]; then
     TRAIN_ARGS="$CONFIG_PARAM \
         --dataset-dir $DATASET_DIR \
         --run-name $RUN_NAME \
-        --batch-size 4 \
+        --batch-size 8 \
         --max-steps $MAX_STEPS \
         --max-epochs $MAX_EPOCHS \
         --save-every $SAVE_EVERY \
@@ -905,7 +905,7 @@ else
          python $V2_SCRIPT $CONFIG_PARAM \
             --dataset-dir $DATASET_DIR \
             --run-name $RUN_NAME \
-            --batch-size 4 \
+            --batch-size 8 \
             --max-steps $MAX_STEPS \
             --max-epochs $MAX_EPOCHS \
             --save-every $SAVE_EVERY \
@@ -919,7 +919,7 @@ else
             accelerate launch $V2_SCRIPT $CONFIG_PARAM \
                 --dataset-dir $DATASET_DIR \
                 --run-name $RUN_NAME \
-                --batch-size 4 \
+                --batch-size 8 \
                 --max-steps $MAX_STEPS \
                 --max-epochs $MAX_EPOCHS \
                 --save-every $SAVE_EVERY \
@@ -932,7 +932,7 @@ else
                 accelerate launch $V2_SCRIPT $CONFIG_PARAM \
                     --dataset-dir $DATASET_DIR \
                     --run-name $RUN_NAME \
-                    --batch-size 4 \
+                    --batch-size 8 \
                     --max-steps $MAX_STEPS \
                     --max-epochs $MAX_EPOCHS \
                     --save-every $SAVE_EVERY \
@@ -944,7 +944,7 @@ else
                 python $V2_SCRIPT $CONFIG_PARAM \
                     --dataset-dir $DATASET_DIR \
                     --run-name $RUN_NAME \
-                    --batch-size 4 \
+                    --batch-size 8 \
                     --max-steps $MAX_STEPS \
                     --max-epochs $MAX_EPOCHS \
                     --save-every $SAVE_EVERY \
