@@ -644,7 +644,7 @@ class Trainer:
                         raise e
                 
                 # 验证和早停机制（warmup阶段不进行验证和早停）
-                if self.val_dataloader and self.iters >= self.warmup_steps and self.iters % self.validation_interval == 0:
+                if self.val_dataloader and self.iters - self.warmup_steps > 0 and (self.iters - self.warmup_steps) % self.validation_interval == 0:
                     val_loss = self.validate()
                     if val_loss is not None:
                         if self.accelerator.is_main_process:
