@@ -1098,7 +1098,7 @@ class Trainer:
                 print(f"epoch {self.epoch}, step {self.iters}, loss: {self.ema_loss}")
 
             # 验证和早停机制
-            if self.val_dataloader and self.iters % self.validation_interval == 0:
+            if self.val_dataloader and self.iters % self.validation_interval == 0 and self.iters >= self.warmup_steps:
                 val_loss = self.validate()
                 if val_loss is not None:
                     print(f"Validation loss at step {self.iters}:【{val_loss}】")
