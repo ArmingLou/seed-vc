@@ -1069,6 +1069,26 @@ class Trainer:
             return avg_loss
         else:
             return None
+    
+    def _save_best_model(self):
+        """保存最佳模型"""
+        print(f"Saving best model with validation loss: {self.best_val_loss}")
+        state = {
+            'net': {key: self.model[key].state_dict() for key in self.model},
+            'optimizer': self.optimizer.state_dict(),
+            'scheduler': self.optimizer.scheduler_state_dict(),
+            'iters': self.iters,
+            'epoch': self.epoch,
+            'best_val_loss': self.best_val_loss,
+            'patience_counter': self.patience_counter,
+            'ema_loss': self.ema_loss,
+            'best_train_loss': self.best_train_loss,
+            'current_lr': self.optimizer.optimizers['cfm'].param_groups[0]['lr'],  # 保存当前学习率
+        }
+        os.makedirs(self.log_dir, exist_ok=True)
+        save_path = os.path.join(self.log_dir, 'best_model.pth')
+        torch.save(state, save_path)
+        print(f"Best model saved at {save_path}")
 
     def train_one_epoch(self):
         # self.epoch represents the epoch index (0-based)
@@ -1123,6 +1143,8 @@ class Trainer:
                         self.best_val_loss = val_loss
                         self.patience_counter = 0
                         print(f"Improved validation loss: 【{val_loss}】")
+                        # 保存最佳模型
+                        self._save_best_model()
                     else:
                         self.patience_counter += 1
                         print(f"No improvement in validation loss. Patience: {self.patience_counter}/{self.patience}")
@@ -1229,6 +1251,9 @@ class Trainer:
             if self.should_stop:
                 break
 
+        # 不再在训练结束时强制保存最佳模型，因为在训练过程中已经保存过了
+        # self._save_best_model()
+        
         if self.should_copy:
             print('Saving final model..')
             state = {

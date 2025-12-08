@@ -587,3 +587,10 @@ python train.py --config ./configs/presets/config_cantonese-dit_mel_seed_uvit_wh
   --patience 20 \
   --validation-interval 10
 ```
+
+
+
+# 什么时候应该调低 或 调高 学习率
+不是验证loss上升就需要调低学习率，而是 验证loss不好（上升或停滞），而 训练loss却一直在上升，才需要调低学习率。学习率直接影响的是训练 loss。
+如果验证loss在上升或停滞，但是 训练loss基本停滞（很小幅度波动），那就是学习率不足，不能让 验证率突破下降，学习力不足，这时就应该反而调高学习率。
+学习率直接 影响 训练loss，直接表现就是：学习率过高，训练loss会上升（不好，在发散）；学习率过低，训练loss会停滞（极小幅度波动），基本没有什么学习效果，但是此时也会 导致 验证loss 上升的，验证loss，是逆水行舟，学习不前，验证loss就上升。

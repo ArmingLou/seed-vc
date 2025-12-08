@@ -610,6 +610,46 @@ class Trainer:
             return avg_loss
         else:
             return None
+    
+    def _save_best_model(self):
+        """保存最佳模型"""
+        print(f"Saving best model with validation loss: {self.best_val_loss}")
+        training_state = {
+            'iters': self.iters,
+            'epoch': self.epoch,
+            'best_val_loss': self.best_val_loss,
+            'patience_counter': self.patience_counter,
+            'best_train_loss': self.best_train_loss,
+            'switched_to_val_scheduler': self.switched_to_val_scheduler,
+            'scheduler': self.scheduler.state_dict(),
+            'current_lr': self.optimizer.param_groups[0]['lr'],  # 保存当前学习率
+        }
+        
+        # 根据训练参数决定保存哪些模型
+        # 当同时训练AR和CFM时，分别保存两个模型以区分
+        if self.train_ar:
+            state = {
+                'net': {
+                    'ar': self.accelerator.unwrap_model(self.model).ar.state_dict(),
+                    'length_regulator': self.accelerator.unwrap_model(self.model).ar_length_regulator.state_dict(),
+                },
+                **training_state,  # 合并训练状态
+            }
+            save_path = os.path.join(self.log_dir, 'ar_best.pth')
+            torch.save(state, save_path)
+            print(f"Best AR model saved at {save_path}")
+        
+        if self.train_cfm:
+            state = {
+                'net': {
+                    'cfm': self.accelerator.unwrap_model(self.model).cfm.state_dict(),
+                    'length_regulator': self.accelerator.unwrap_model(self.model).cfm_length_regulator.state_dict(),
+                },
+                **training_state,  # 合并训练状态
+            }
+            save_path = os.path.join(self.log_dir, 'cfm_best.pth')
+            torch.save(state, save_path)
+            print(f"Best CFM model saved at {save_path}")
 
     def train(self):
         """Main training loop"""
@@ -668,6 +708,8 @@ class Trainer:
                             self.patience_counter = 0
                             if self.accelerator.is_main_process:
                                 print(f"Improved validation loss: 【{val_loss}】")
+                                # 保存最佳模型
+                                self._save_best_model()
                         else:
                             self.patience_counter += 1
                             if self.accelerator.is_main_process:
@@ -679,6 +721,8 @@ class Trainer:
                                 self.should_stop = True
                                 # 训练完成，设置标志位
                                 self.training_completed = True
+                                # 不再在早停时强制保存最佳模型，因为在训练过程中已经保存过了
+                                # self._save_best_model()
                                 return
                 
                 if self.iters >= self.max_steps and self.accelerator.is_main_process:
