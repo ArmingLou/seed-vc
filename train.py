@@ -28,6 +28,8 @@ class ManualProgressiveTrainer:
         self.config_path = config_path
         self.run_name = run_name
         self.teacher_model_path = teacher_model_path
+        # 提取resume_lr参数（如果存在）
+        self.resume_lr = kwargs.pop('resume_lr', 0.0)
         self.kwargs = kwargs
         self.current_trainer = None
     
@@ -50,6 +52,7 @@ class ManualProgressiveTrainer:
             pretrained_ckpt_path=pretrained_ckpt,
             data_dir=dataset_dir,
             run_name=version_run_name,
+            resume_lr=self.resume_lr,
             **self.kwargs
         )
         
@@ -100,6 +103,7 @@ class Trainer:
                  initial_lr=1e-5,
                  warmup_steps=1000,
                  teacher_model_path=None,  # 添加教师模型路径参数
+                 resume_lr=0.0,  # 添加resume_lr参数，默认值为0.0
                  ):
         self.device = torch.device(device)
         self.fp16 = fp16
@@ -136,6 +140,7 @@ class Trainer:
         self.min_lr = min_lr      # 最小学习率
         self.lr_adjust_interval = lr_adjust_interval  # 学习率调整间隔
         self.warmup_steps = warmup_steps  # 学习率预热步数
+        self.resume_lr = resume_lr  # resume_lr参数
         self.best_train_loss = float('inf')  # 用于学习率调度的最佳训练损失
         # 注意：不要在这里初始化 switched_to_val_scheduler，因为它会在检查点恢复时被设置
         # 但是在 fresh training 的情况下需要初始化
@@ -308,10 +313,15 @@ class Trainer:
                         
                         # 处理当前学习率
                         if 'current_lr' in state:
-                            checkpoint_current_lr = state['current_lr']
+                            # 如果指定了大于0的resume_lr值，则强制使用该值作为当前学习率
+                            if self.resume_lr > 0.0:
+                                checkpoint_current_lr = self.resume_lr
+                                print(f"Using resume_lr ({self.resume_lr}) to override checkpoint current_lr ({state['current_lr']})")
+                            else:
+                                checkpoint_current_lr = state['current_lr']
                                             
                             self.need_adjust_current_lr = True
-                        # 学习率调度器切换状态已在上面恢复，这里不需要重复恢复
+                            # 学习率调度器切换状态已在上面恢复，这里不需要重复恢复
                             
                             # 首先检查是否需要根据最小学习率调整
                             # 如果检查点中的当前学习率比命令行的最小学习率低，需要调整
@@ -1295,6 +1305,7 @@ def main(args):
             lr_adjust_interval=args.lr_adjust_interval,
             initial_lr=args.initial_lr,
             warmup_steps=args.warmup_steps,
+            resume_lr=args.resume_lr,
         )
         
         # 训练数据集
@@ -1324,6 +1335,7 @@ def main(args):
             lr_adjust_interval=args.lr_adjust_interval,
             initial_lr=args.initial_lr,
             warmup_steps=args.warmup_steps,
+            resume_lr=args.resume_lr,
             teacher_model_path=args.pretrained_ckpt if args.distill else None,  # 根据distill参数决定是否传递教师模型路径
         )
         trainer.train()
@@ -1377,6 +1389,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr-adjust-interval', type=int, default=50, help='Interval (in steps) for learning rate adjustment print logs')
     parser.add_argument('--initial-lr', type=float, default=1e-5, help='Initial learning rate')
     parser.add_argument('--warmup-steps', type=int, default=1000, help='Number of warmup steps')
+    parser.add_argument('--resume-lr', type=float, default=0.0, help='Resume learning rate for resuming training from checkpoint')
 
     parser.add_argument("--gpu", type=int, help="Which GPU id to use", default=0)
     

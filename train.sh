@@ -121,6 +121,7 @@ MIN_LR=1e-7
 LR_ADJUST_INTERVAL=10
 INITIAL_LR=1e-5 # batch×2 → lr÷4 目前粤语如果batch size 8 。声调敏感学习率更低用1e-5
 WARMUP_STEPS=100 # batch×2 → steps÷2 总样本数的4%左右
+RESUME_LR=0.0 # 恢复训练时的学习率，默认为0.0表示使用检查点中的学习率
 
 # 新增预训练模型检查点变量
 PRETRAINED_CKPT=""
@@ -243,6 +244,11 @@ while [[ $# -gt 0 ]]; do
             echo "设置预热步数: $WARMUP_STEPS"
             shift 2
             ;;
+        --resume-lr)
+            RESUME_LR="$2"
+            echo "设置恢复学习率: $RESUME_LR"
+            shift 2
+            ;;
         
         --pretrained-ckpt)
             PRETRAINED_CKPT="$2"
@@ -287,6 +293,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --lr-adjust-interval 设置学习率调整间隔 (默认: 10)"
             echo "  --initial-lr    设置初始学习率 (默认: 4e-5)"
             echo "  --warmup-steps  设置预热步数 (默认: 50)"
+            echo "  --resume-lr     设置恢复学习率 (默认: 0.0)"
             
             echo "  --pretrained-ckpt       V1 版本预训练检查点路径"
             echo "  --pretrained-cfm-ckpt   V2 版本 CFM 预训练检查点路径"
@@ -546,6 +553,14 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     fi
     echo "预热步数: $WARMUP_STEPS"
     
+    read -p "请输入恢复学习率 (默认: 0.0): " resume_lr_input
+    if [[ -n "$resume_lr_input" ]]; then
+        RESUME_LR="$resume_lr_input"
+    else
+        RESUME_LR=0.0
+    fi
+    echo "恢复学习率: $RESUME_LR"
+    
     # 如果是V2版本，询问训练目标
     if [[ "$VERSION" = "v2" ]]; then
         echo ""
@@ -659,6 +674,7 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     echo "学习率调整日志打印间隔step: $LR_ADJUST_INTERVAL"
     echo "初始学习率: $INITIAL_LR"
     echo "预热步数: $WARMUP_STEPS"
+    echo "恢复学习率: $RESUME_LR"
 
     # 生成等效的非交互式命令行命令
     echo ""
@@ -734,6 +750,10 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     
     # if [[ "$MAX_STEPS" != "1000" ]]; then
         CMD+=" --max-steps $MAX_STEPS"
+    # fi
+    
+    # if [[ "$RESUME_LR" != "0.0" ]]; then
+        CMD+=" --resume-lr $RESUME_LR"
     # fi
     
     # if [[ "$INITIAL_LR" != "4e-5" ]]; then
@@ -814,7 +834,8 @@ if [ "$VERSION" = "v1" ]; then
         --min-lr $MIN_LR \
         --lr-adjust-interval $LR_ADJUST_INTERVAL \
         --initial-lr $INITIAL_LR \
-        --warmup-steps $WARMUP_STEPS"
+        --warmup-steps $WARMUP_STEPS \
+        --resume-lr $RESUME_LR"
     
     # 添加验证集目录参数（如果提供了的话）
     if [[ -n "$VAL_DATASET_DIR" ]]; then
@@ -864,6 +885,7 @@ else
     V2_TRAIN_ARGS+=" --lr-adjust-interval $LR_ADJUST_INTERVAL"
     V2_TRAIN_ARGS+=" --initial-lr $INITIAL_LR"
     V2_TRAIN_ARGS+=" --warmup-steps $WARMUP_STEPS"
+    V2_TRAIN_ARGS+=" --resume-lr $RESUME_LR"
     
     if [[ "$TRAIN_CFM" = true ]] || [[ -n "$TRAIN_CFM_ARG" ]]; then
         V2_TRAIN_ARGS+=" --train-cfm"

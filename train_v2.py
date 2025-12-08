@@ -116,6 +116,7 @@ class Trainer:
             # 添加新的知识蒸馏参数
             distill_ar=False,
             distill_cfm=False,
+            resume_lr=0.0,  # 添加resume_lr参数，默认值为0.0
         ):
         self.config_path = config_path
         self.mixed_precision = mixed_precision
@@ -126,6 +127,8 @@ class Trainer:
         # 保存预训练检查点路径（同时用于预训练和蒸馏）
         self.pretrained_ar_ckpt_path = pretrained_ar_ckpt_path
         self.pretrained_cfm_ckpt_path = pretrained_cfm_ckpt_path
+        # 保存resume_lr参数
+        self.resume_lr = resume_lr
         
         # Check FORCE_CPU environment variable
         force_cpu = os.environ.get('FORCE_CPU', '0') == '1'
@@ -450,14 +453,18 @@ class Trainer:
                                 self.cosine_scheduler.step()
                         print(f"Learning rate scheduler fast-forwarded to step {self.iters}")
                         
-                        # 恢复优化器的学习率
                         # 获取检查点中保存的学习率
                         if 'current_lr' in state:
-                            checkpoint_lr = state['current_lr']
+                            # 如果指定了大于0的resume_lr值，则强制使用该值作为当前学习率
+                            if self.resume_lr > 0.0:
+                                checkpoint_lr = self.resume_lr
+                                print(f"Using resume_lr ({self.resume_lr}) to override checkpoint current_lr ({state['current_lr']})")
+                            else:
+                                checkpoint_lr = state['current_lr']
                             # 设置优化器的学习率到检查点中保存的值
                             for param_group in self.optimizer.param_groups:
                                 param_group['lr'] = checkpoint_lr
-                            print(f"Restored optimizer learning rate to {checkpoint_lr:.2e}")
+                            print(f"Set optimizer learning rate to {checkpoint_lr:.2e}")
                 except Exception as e:
                     print(f"Warning: Could not load training state from checkpoint: {e}")
                     # 重置状态
@@ -969,6 +976,7 @@ def main(args):
             lr_adjust_interval=args.lr_adjust_interval,
             initial_lr=args.initial_lr,
             warmup_steps=args.warmup_steps,
+            resume_lr=args.resume_lr,
             # 传递新的知识蒸馏参数
             distill_ar=args.distill_ar,
             distill_cfm=args.distill_cfm,
@@ -1015,6 +1023,7 @@ def main(args):
             lr_adjust_interval=args.lr_adjust_interval,
             initial_lr=args.initial_lr,
             warmup_steps=args.warmup_steps,
+            resume_lr=args.resume_lr,
             # 传递新的知识蒸馏参数
             distill_ar=args.distill_ar,
             distill_cfm=args.distill_cfm,
@@ -1062,6 +1071,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr-adjust-interval', type=int, default=50, help='Interval (in steps) for learning rate adjustment print logs')
     parser.add_argument('--initial-lr', type=float, default=1e-5, help='Initial learning rate')
     parser.add_argument('--warmup-steps', type=int, default=1000, help='Number of warmup steps')
+    parser.add_argument('--resume-lr', type=float, default=0.0, help='Resume learning rate for resuming training from checkpoint')
     
     # 知识蒸馏参数
     parser.add_argument('--distill-ar', action='store_true', help='Enable knowledge distillation for AR model')
