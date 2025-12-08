@@ -412,7 +412,12 @@ class Trainer:
                     if 'best_val_loss' in state:
                         self.best_val_loss = state['best_val_loss']
                     if 'patience_counter' in state:
-                        self.patience_counter = state['patience_counter']
+                        if self.resume_lr > 0.0:
+                            #强制设置 恢复学习率时， 也强制重置 早停耐心计数器。
+                            print("Using resume_lr > 0.0, forcing patience_counter to 0")
+                            self.patience_counter = 0
+                        else:
+                            self.patience_counter = state['patience_counter']
                     
                     # 恢复学习率相关状态
                     if 'best_train_loss' in state:
