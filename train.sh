@@ -111,8 +111,8 @@ SAVE_EVERY=100
 TRAIN_CFM=false
 TRAIN_AR=false
 FP16=false  # 是否使用FP16，默认false
-PATIENCE=25 # 建议取目标epoch数x10，结合*validation_interval至少覆盖一个epoch。
-VALIDATION_INTERVAL=10 # 取epoch步数 1/10 。validation_interval × patience × batch_size >= 样本数 
+PATIENCE=25 # 建议至少覆盖一个epoch。
+VALIDATION_INTERVAL=10 # 建议约验证样本数/batch_size 。validation_interval × patience × batch_size >= 训练样本数 。validation_interval × batch_size = 验证样本数
 DISTILL=false
 # V2版本的蒸馏参数
 DISTILL_AR=false
@@ -279,9 +279,9 @@ while [[ $# -gt 0 ]]; do
             echo "  --val-dataset-dir|--val-dir 设置验证集目录"
             echo "  --max-steps|-s  设置最大步数 (默认: 1000)"
             echo "  --max-epochs|-e 设置最大学习轮数 (默认: 1000)"
-            echo "  --save-every|-S 设置保存间隔 (默认: 100)"
-            echo "  --patience|-p   设置早停耐心值 (默认: 10，建议取目标epoch数x10，结合*validation_interval至少覆盖一个epoch)"
-            echo "  --validation-interval|-v 设置验证间隔step (默认: 10，建议取epoch步数 1/10)"
+            echo "  --save-every|-S 设置保存间隔 (默认: 100，建议与验证间隔一致)"
+            echo "  --patience|-p   设置早停耐心值 (默认: 10，建议至少覆盖一个epoch)"
+            echo "  --validation-interval|-v 设置验证间隔step (默认: 10，建议约验证样本数/batch_size)"
             echo "  --train-cfm     训练 CFM 模型 (仅 V2)"
             echo "  --train-ar      训练 AR 模型 (仅 V2)"
             echo "  --fp16          使用 FP16 精度 (默认: false)"
@@ -395,7 +395,7 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     echo "最大学习轮数: $MAX_EPOCHS"
     
     # 询问保存间隔
-    read -p "请输入保存间隔 (默认: 100): " save_every_input
+    read -p "请输入保存间隔 (默认: 100，建议与验证间隔一致): " save_every_input
     if [[ -n "$save_every_input" ]]; then
         SAVE_EVERY="$save_every_input"
     else
@@ -418,7 +418,7 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     fi
     
     # 询问早停耐心值
-    read -p "请输入早停耐心值 (默认: 10，建议取目标epoch数x10，结合*validation_interval至少覆盖一个epoch): " patience_input
+    read -p "请输入早停耐心值 (默认: 10，建议至少覆盖一个epoch): " patience_input
     if [[ -n "$patience_input" ]]; then
         PATIENCE="$patience_input"
     else
@@ -427,7 +427,7 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     echo "早停耐心值: $PATIENCE"
     
     # 询问验证间隔
-    read -p "请输入验证间隔step (默认: 10,建议取epoch步数 1/10): " validation_interval_input
+    read -p "请输入验证间隔step (默认: 10，建议约验证样本数/batch_size): " validation_interval_input
     if [[ -n "$validation_interval_input" ]]; then
         VALIDATION_INTERVAL="$validation_interval_input"
     else

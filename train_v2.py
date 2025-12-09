@@ -246,6 +246,8 @@ class Trainer:
             batch_size=batch_size,
             num_workers=num_workers,
         )
+        # 保存数据集引用以便在每个epoch设置随机索引
+        self.train_dataset = self.train_dataloader.dataset
 
     def _init_models(self, train_cfm=False, train_ar=False):
         """Initialize models and optimizers"""
@@ -658,26 +660,33 @@ class Trainer:
             epoch_start_time = time.time()
             
             init_epoch = False
+            
+            firstItersIdx = self.iters % len(self.train_dataloader)
+            if firstItersIdx == 0 and self.iters != 0:
+                self.epoch += 1
+            if self.epoch >= self.max_epochs:
+                print("Reached max epochs, stopping training")
+                exit() # 无需归档，直接退出。
+
+            # 在epoch开始时就设置随机种子，确保数据加载器能正确使用
+            try:
+                self.train_dataloader.sampler.set_epoch(self.epoch)
+            except AttributeError:
+                # 如果sampler没有set_epoch方法，则使用我们的自定义方法
+                self.train_dataset.set_epoch(self.epoch)
 
             for i, batch in enumerate(tqdm(self.train_dataloader)):
                 stepInEpoch = self.iters % len(self.train_dataloader)
-                if stepInEpoch == 0 and self.iters != 0:
-                    self.epoch += 1
-                    # epoch += 1
                 if stepInEpoch != i:
                     continue
                 self.iters += 1
                 
-                if self.iters > self.max_steps or self.epoch >= self.max_epochs:
+                if self.iters > self.max_steps:
                     self.should_stop = True
-                    print("Reached max epochs (or max steps), stopping training")
+                    print("Reached max steps, stopping training")
                     exit() # 无需归档，直接退出。
                 
                 if not init_epoch:
-                    try:
-                        self.train_dataloader.sampler.set_epoch(self.epoch)
-                    except AttributeError:
-                        pass
                     self.model.train()
                     init_epoch = True
                 
@@ -850,7 +859,7 @@ class Trainer:
                 # 当patience_counter达到一定阈值时，手动降低学习率
                 # 每当patience_counter增加时，按0.5的比例降低学习率
                 switch_patience = max(1, self.patience // 4)  # 使用早停耐心值的四分之一作为切换耐心值
-                if self.patience_counter >= switch_patience and self.patience_counter % max(2, switch_patience // 2) == 0:
+                if self.patience_counter >= switch_patience and self.patience_counter < self.patience and self.patience_counter % max(2, switch_patience) == 0:
                     # 获取当前学习率并降低它
                     current_lr = self.optimizer.param_groups[0]['lr']
                     new_lr = max(current_lr * 0.5, self.min_lr)

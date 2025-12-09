@@ -79,6 +79,9 @@ class FT_Dataset(torch.utils.data.Dataset):
                                  f".wav, .mp3, .flac, .ogg, .m4a, .opus. "
                                  f"Total files checked: {file_count}")
 
+        # 添加用于存储当前epoch打乱顺序的索引列表
+        self.current_epoch_indices = list(range(len(self.data)))
+        self.current_epoch = 0
 
         self.sr = sr
         self.mel_fn_args = {
@@ -125,8 +128,20 @@ class FT_Dataset(torch.utils.data.Dataset):
             print(f"Librosa failed to load {wav_path}: {e}")
             raise e
 
+    def set_epoch(self, epoch):
+        """设置当前epoch并生成该epoch的随机索引序列"""
+        self.current_epoch = epoch
+        # 为每个epoch生成确定性的随机种子
+        epoch_seed = 1234 + epoch
+        rng = random.Random(epoch_seed)
+        # 创建该epoch的索引副本并打乱
+        self.current_epoch_indices = list(range(len(self.data)))
+        rng.shuffle(self.current_epoch_indices)
+
     def __getitem__(self, idx):
-        idx = idx % len(self.data)
+        # 使用当前epoch的打乱索引
+        shuffled_idx = self.current_epoch_indices[idx % len(self.data)]
+        idx = shuffled_idx
         wav_path = self.data[idx]
         try:
             # 使用更安全的音频加载方法

@@ -150,6 +150,8 @@ class Trainer:
             num_workers=num_workers,
             shuffle=shuffle_data,
         )
+        # 保存数据集引用以便在每个epoch设置随机索引
+        self.train_dataset = self.train_dataloader.dataset
         
         # 初始化验证集数据加载器（如果提供了验证集路径）
         self.val_dataloader = None
@@ -1121,19 +1123,28 @@ class Trainer:
         # print_epoch = self.epoch
             
         _ = [self.model[key].train() for key in self.model]
-        for i, batch in enumerate(tqdm(self.train_dataloader)):
+        
+        firstItersIdx = self.iters % len(self.train_dataloader)
+        if firstItersIdx == 0 and self.iters != 0:
+            self.epoch += 1
+        if self.epoch >= self.n_epochs:
+            self.should_copy = False
+            print("Reached max epochs, stopping training")
+            return
+                
+        # 为当前epoch设置数据集的随机索引序列
+        self.train_dataset.set_epoch(self.epoch)
+        for i, batch in enumerate(tqdm(self.train_dataloader)): 
             
             stepInEpoch = self.iters % len(self.train_dataloader)
-            if stepInEpoch == 0 and self.iters != 0:
-                self.epoch += 1
             if stepInEpoch != i:
                 continue
             self.iters += 1
             
-            if self.iters > self.max_steps or self.epoch >= self.n_epochs:
+            if self.iters > self.max_steps:
                 self.should_stop = True
                 self.should_copy = False
-                print("Reached max epochs (or max steps), stopping training")
+                print("Reached max steps, stopping training")
                 return
             
             # Ensure deterministic behavior by setting seeds based on current state
@@ -1189,7 +1200,7 @@ class Trainer:
                         # 当patience_counter达到一定阈值时，手动降低学习率
                         # 每当patience_counter增加时，按0.5的比例降低学习率
                         switch_patience = max(1, self.patience // 4)  # 使用早停耐心值的四分之一作为切换耐心值
-                        if self.patience_counter >= switch_patience and self.patience_counter % max(2, switch_patience // 2) == 0:
+                        if self.patience_counter >= switch_patience and self.patience_counter < self.patience and self.patience_counter % max(2, switch_patience) == 0:
                             # 获取当前学习率并降低它
                             current_lr = self.optimizer.optimizers['cfm'].param_groups[0]['lr']
                             new_lr = max(current_lr * 0.5, self.min_lr)
