@@ -160,6 +160,7 @@ SONG=false                # V1版本是否歌手转换
 F0_CONDITION="False"      # V1版本的--f0-condition，默认False
 AUTO_F0_ADJUST="False"    # V1版本的--auto-f0-adjust，默认False
 FP16="False"                # 是否使用fp16精度，默认false
+LANGUAGE=""                 # 语言参数
 
 # 新增参数
 CHECKPOINT=""            # 模型检查点路径
@@ -182,6 +183,7 @@ show_help() {
     echo "      --v2                     使用V2版本"
     echo "      --gpu                    使用GPU运行 (默认使用CPU)"
     echo "      --fp16                   使用fp16精度 (默认: false)"
+    echo "      --language LANG          指定语言参数 (例如: zh, yue, en)"
     echo ""
     echo "V1版本专用参数:"
     echo "  -S, --song                   使用V1的歌声转换"
@@ -256,6 +258,10 @@ while [[ $# -gt 0 ]]; do
         --fp16)
             FP16="True"
             shift
+            ;;
+        --language)
+            LANGUAGE="$2"
+            shift 2
             ;;
         -A|--auto-f0-adjust)
             AUTO_F0_ADJUST="True"
@@ -474,7 +480,16 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
         fi
         echo "已设置推理CFG率: $INFERENCE_CFG_RATE"
         
-        
+        # 询问语言参数
+        read -p "是否指定语言参数 (--language)？(y/N): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            read -p "请输入语言参数 (例如: zh, yue, en): " language_input
+            if [[ -n "$language_input" ]]; then
+                LANGUAGE="$language_input"
+                echo "已设置语言参数: $LANGUAGE"
+            fi
+        fi
     else
         # V2版本特有的参数
         # 询问发音清晰度（有默认值和范围）
@@ -593,6 +608,8 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
         echo "配置文件: $CONFIG"
     fi
 
+    echo "语言参数: $LANGUAGE"
+
     # 生成等效的非交互式命令行命令
     echo ""
     echo "=== 等效的非交互式命令行 ==="
@@ -647,6 +664,10 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     
     if [[ "$FP16" = "True" ]]; then
         CMD+=" --fp16"
+    fi
+
+    if [[ -n "$LANGUAGE" ]]; then
+        CMD+=" --language $LANGUAGE"
     fi
 
     echo "$CMD"
@@ -916,6 +937,11 @@ for audio_file in "${AUDIO_FILES[@]}"; do
             --diffusion-steps $DIFFUSION_STEPS \
             --inference-cfg-rate $INFERENCE_CFG_RATE \
             --fp16 $FP16"
+        
+        # 添加语言参数
+        if [[ -n "$LANGUAGE" ]]; then
+            CMD="$CMD --language $LANGUAGE"
+        fi
         
         # 添加checkpoint和config参数（如果指定）
         if [[ -n "$CHECKPOINT" ]]; then

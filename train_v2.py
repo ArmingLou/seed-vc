@@ -117,6 +117,7 @@ class Trainer:
             distill_ar=False,
             distill_cfm=False,
             resume_lr=0.0,  # 添加resume_lr参数，默认值为0.0
+            language=None,  # 添加language参数，默认值为None
         ):
         self.config_path = config_path
         self.mixed_precision = mixed_precision
@@ -129,6 +130,8 @@ class Trainer:
         self.pretrained_cfm_ckpt_path = pretrained_cfm_ckpt_path
         # 保存resume_lr参数
         self.resume_lr = resume_lr
+        # 保存language参数
+        self.language = language
         
         # Check FORCE_CPU environment variable
         force_cpu = os.environ.get('FORCE_CPU', '0') == '1'
@@ -1051,6 +1054,7 @@ def main(args):
             initial_lr=args.initial_lr,
             warmup_steps=args.warmup_steps,
             resume_lr=args.resume_lr,
+            language=args.language,
             # 传递新的知识蒸馏参数
             distill_ar=args.distill_ar,
             distill_cfm=args.distill_cfm,
@@ -1098,6 +1102,7 @@ def main(args):
             initial_lr=args.initial_lr,
             warmup_steps=args.warmup_steps,
             resume_lr=args.resume_lr,
+            language=args.language,
             # 传递新的知识蒸馏参数
             distill_ar=args.distill_ar,
             distill_cfm=args.distill_cfm,
@@ -1150,6 +1155,9 @@ if __name__ == '__main__':
     # 知识蒸馏参数
     parser.add_argument('--distill-ar', action='store_true', help='Enable knowledge distillation for AR model')
     parser.add_argument('--distill-cfm', action='store_true', help='Enable knowledge distillation for CFM model')
+    
+    # 语言参数
+    parser.add_argument('--language', type=str, default=None, help='Language for Whisper model')
     
     args = parser.parse_args()
     main(args)

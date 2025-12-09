@@ -187,9 +187,18 @@ def load_models(args):
             print(f"信息: 已成功回退到float32精度并重新加载模型")
             
         def semantic_fn(waves_16k):
+            # 准备输入特征，如果指定了语言则添加语言参数
+            feature_extractor_args = {
+                "return_tensors": "pt",
+                "return_attention_mask": True,
+                "sampling_rate": 16000,
+            }
+            if args.language is not None:
+                print(f"正在使用语言参数: {args.language}")
+                feature_extractor_args["language"] = args.language
+            
             ori_inputs = whisper_feature_extractor([waves_16k.squeeze(0).cpu().numpy()],
-                                                   return_tensors="pt",
-                                                   return_attention_mask=True)
+                                                   **feature_extractor_args)
             ori_input_features = whisper_model._mask_input_features(
                 ori_inputs.input_features, attention_mask=ori_inputs.attention_mask).to(device)
             with torch.no_grad():
@@ -551,5 +560,6 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint", type=str, help="Path to the checkpoint file", default=None)
     parser.add_argument("--config", type=str, help="Path to the config file", default=None)
     parser.add_argument("--fp16", type=str2bool, default=True)
+    parser.add_argument("--language", type=str, default=None, help="Language for Whisper model")
     args = parser.parse_args()
     main(args)

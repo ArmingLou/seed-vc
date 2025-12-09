@@ -94,6 +94,7 @@ class Trainer:
                  warmup_steps=1000,
                  teacher_model_path=None,  # 添加教师模型路径参数
                  resume_lr=0.0,  # 添加resume_lr参数，默认值为0.0
+                 language=None,  # 添加language参数，默认值为None
                  ):
         self.device = torch.device(device)
         self.fp16 = fp16
@@ -167,7 +168,7 @@ class Trainer:
         
         self.f0_condition = config['model_params']['DiT'].get('f0_condition', False)
         self.build_sv_model(self.device, config)
-        self.build_semantic_fn(self.device, config, fp16)
+        self.build_semantic_fn(self.device, config, fp16, language)
         if self.f0_condition:
             self.build_f0_fn(self.device, config)
         self.build_converter(self.device, config)
@@ -602,7 +603,7 @@ class Trainer:
         else:
             print("未找到教师模型检查点，将不使用知识蒸馏")
 
-    def build_semantic_fn(self, device, config, fp16=True):
+    def build_semantic_fn(self, device, config, fp16=True, language=None):
         speech_tokenizer_type = config['model_params']['speech_tokenizer'].get('type', 'cosyvoice')
         if speech_tokenizer_type == 'whisper':
             from transformers import AutoFeatureExtractor, WhisperModel
@@ -651,11 +652,19 @@ class Trainer:
                 print(f"信息: 已成功回退到float32精度并重新加载模型")
             
             def semantic_fn(waves_16k):
+                # 准备输入特征，如果指定了语言则添加语言参数
+                feature_extractor_args = {
+                    "return_tensors": "pt",
+                    "return_attention_mask": True,
+                    "sampling_rate": 16000,
+                }
+                if language is not None:
+                    print(f"正在使用语言参数: {language}")
+                    feature_extractor_args["language"] = language
+                
                 ori_inputs = self.whisper_feature_extractor(
                     [w16k.cpu().numpy() for w16k in waves_16k],
-                    return_tensors="pt",
-                    return_attention_mask=True,
-                    sampling_rate=16000,
+                    **feature_extractor_args
                 )
                 ori_input_features = self.whisper_model._mask_input_features(
                     ori_inputs.input_features, attention_mask=ori_inputs.attention_mask
@@ -1354,6 +1363,7 @@ def main(args):
             initial_lr=args.initial_lr,
             warmup_steps=args.warmup_steps,
             resume_lr=args.resume_lr,
+            language=args.language,
         )
         
         # 训练数据集
@@ -1384,6 +1394,7 @@ def main(args):
             initial_lr=args.initial_lr,
             warmup_steps=args.warmup_steps,
             resume_lr=args.resume_lr,
+            language=args.language,
             teacher_model_path=args.pretrained_ckpt if args.distill else None,  # 根据distill参数决定是否传递教师模型路径
         )
         trainer.train()
@@ -1430,6 +1441,8 @@ if __name__ == '__main__':
     
 
     parser.add_argument('--distill', action='store_true',
-                       help='Enable knowledge distillation')    
+                       help='Enable knowledge distillation')
+    parser.add_argument('--language', type=str, default=None,
+                       help='Language for Whisper model')
     args = parser.parse_args()
     main(args)

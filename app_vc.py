@@ -150,9 +150,19 @@ def load_models(args):
             print(f"信息: 已成功回退到float32精度并重新加载模型")
             
         def semantic_fn(waves_16k):
+            global current_language
+            # 准备输入特征，如果指定了语言则添加语言参数
+            feature_extractor_args = {
+                "return_tensors": "pt",
+                "return_attention_mask": True,
+                "sampling_rate": 16000,
+            }
+            if current_language is not None:
+                print(f"正在使用语言参数: {current_language}")
+                feature_extractor_args["language"] = current_language
+            
             ori_inputs = whisper_feature_extractor([waves_16k.squeeze(0).cpu().numpy()],
-                                                   return_tensors="pt",
-                                                   return_attention_mask=True)
+                                                   **feature_extractor_args)
             ori_input_features = whisper_model._mask_input_features(
                 ori_inputs.input_features, attention_mask=ori_inputs.attention_mask).to(device)
             with torch.no_grad():
@@ -322,9 +332,13 @@ max_context_window = None
 sr = None
 hop_length = None
 overlap_frame_len = 16
+current_language = None
 @torch.no_grad()
 @torch.inference_mode()
-def voice_conversion(source, target, diffusion_steps, length_adjust, inference_cfg_rate):
+def voice_conversion(source, target, diffusion_steps, length_adjust, inference_cfg_rate, language=None):
+    global current_language
+    current_language = language
+    
     inference_module = model
     mel_fn = to_mel
     # Load audio
@@ -494,6 +508,7 @@ def main(args):
         gr.Slider(minimum=1, maximum=200, value=10, step=1, label="Diffusion Steps / 扩散步数", info="10 by default, 50~100 for best quality / 默认为 10，50~100 为最佳质量"),
         gr.Slider(minimum=0.5, maximum=2.0, step=0.1, value=1.0, label="Length Adjust / 长度调整", info="<1.0 for speed-up speech, >1.0 for slow-down speech / <1.0 加速语速，>1.0 减慢语速"),
         gr.Slider(minimum=0.0, maximum=1.0, step=0.1, value=1.0, label="Inference CFG Rate", info="has subtle influence / 有微小影响"),
+        gr.Dropdown(choices=[("Auto Detect", None), ("Chinese", "zh"), ("Cantonese", "yue"), ("English", "en")], value=None, label="Language / 语言", info="Select language for Whisper model / 为Whisper模型选择语言"),
     ]
 
     examples = [["examples/source/yae_0.wav", "examples/reference/dingzhen_0.wav", 25, 1.0, 0.7, False, True, 0],
@@ -520,6 +535,7 @@ if __name__ == "__main__":
     parser.add_argument("--share", type=str2bool, nargs="?", const=True, default=False, help="Whether to share the app")
     parser.add_argument("--fp16", type=str2bool, nargs="?", const=True, help="Whether to use fp16", default=True)
     parser.add_argument("--gpu", type=int, help="Which GPU id to use", default=0)
+    parser.add_argument("--language", type=str, default=None, help="Language for Whisper model")
     args = parser.parse_args()
     cuda_target = f"cuda:{args.gpu}" if args.gpu else "cuda" 
 

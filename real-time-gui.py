@@ -248,9 +248,17 @@ def load_models(args):
         whisper_feature_extractor = AutoFeatureExtractor.from_pretrained(whisper_name)
 
         def semantic_fn(waves_16k):
+            # 准备输入特征，如果指定了语言则添加语言参数
+            feature_extractor_args = {
+                "return_tensors": "pt",
+                "return_attention_mask": True,
+                "sampling_rate": 16000,
+            }
+            if args.language is not None:
+                feature_extractor_args["language"] = args.language
+            
             ori_inputs = whisper_feature_extractor([waves_16k.squeeze(0).cpu().numpy()],
-                                                   return_tensors="pt",
-                                                   return_attention_mask=True)
+                                                   **feature_extractor_args)
             ori_input_features = whisper_model._mask_input_features(
                 ori_inputs.input_features, attention_mask=ori_inputs.attention_mask).to(device)
             with torch.no_grad():
@@ -1219,6 +1227,7 @@ if __name__ == "__main__":
     parser.add_argument("--config-path", type=str, default=None, help="Path to the vocoder checkpoint")
     parser.add_argument("--fp16", type=str2bool, nargs="?", const=True, help="Whether to use fp16", default=True)
     parser.add_argument("--gpu", type=int, help="Which GPU id to use", default=0)
+    parser.add_argument("--language", type=str, default=None, help="Language for Whisper model")
     args = parser.parse_args()
     cuda_target = f"cuda:{args.gpu}" if args.gpu else "cuda" 
 

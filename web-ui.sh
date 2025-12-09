@@ -72,6 +72,7 @@ AR_CHECKPOINT=""
 FP16="False"
 COMPILE=false
 SHARE=false
+LANGUAGE=""  # 添加语言参数
 
 show_help() {
     echo "用法: $0 [选项]"
@@ -87,6 +88,7 @@ show_help() {
     echo "  -f, --fp16            是否使用 FP16 (默认: False)"
     echo "  -P, --compile         启用编译优化 (仅 V2)"
     echo "  --share               共享 Gradio 应用"
+    echo "  --language LANG       指定语言参数 (例如: zh, yue, en)"
     echo "  -I, --interactive     交互式选择参数"
     echo "  -h, --help            显示此帮助信息"
 }
@@ -147,6 +149,11 @@ while [[ $# -gt 0 ]]; do
             SHARE=true
             echo "启用共享"
             shift
+            ;;
+        --language)
+            LANGUAGE="$2"
+            echo "指定语言: $LANGUAGE"
+            shift 2
             ;;
         -I|--interactive)
             INTERACTIVE_MODE=true
@@ -244,6 +251,17 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
             FP16="False"
             echo "已禁用 FP16"
         fi
+        
+        # 询问语言参数
+        read -p "是否指定语言参数 (--language)？(y/N): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            read -p "请输入语言参数 (例如: zh, yue, en): " language_input
+            if [[ -n "$language_input" ]]; then
+                LANGUAGE="$language_input"
+                echo "已设置语言参数: $LANGUAGE"
+            fi
+        fi
     elif [[ "$APP_TYPE" = "v2" ]]; then
         # V2 特有的参数
         read -p "是否指定 CFM 模型检查点文件 (--cfm-checkpoint)？(y/N): " -n 1 -r
@@ -300,6 +318,7 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     echo "应用类型: $APP_TYPE"
     echo "强制使用 CPU: $USE_CPU"
     echo "共享应用: $SHARE"
+    echo "语言参数: $LANGUAGE"
 
     if [[ "$APP_TYPE" = "vc" ]] || [[ "$APP_TYPE" = "svc" ]]; then
         if [[ -n "$CHECKPOINT" ]]; then
@@ -365,6 +384,10 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     
     if [[ "$FP16" = "True" ]]; then
         CMD+=" --fp16"
+    fi
+
+    if [[ -n "$LANGUAGE" ]]; then
+        CMD+=" --language $LANGUAGE"
     fi
 
     if [[ "$SHARE" = true ]]; then
@@ -433,6 +456,9 @@ fi
 
 # 根据应用类型运行相应的应用程序
 if [ "$APP_TYPE" = "vc" ]; then
+    if [[ -n "$LANGUAGE" ]]; then
+        ARGS="$ARGS --language $LANGUAGE"
+    fi
     if [ -n "$CHECKPOINT" ]; then
         ARGS="$ARGS --checkpoint $CHECKPOINT"
     fi

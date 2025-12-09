@@ -123,6 +123,9 @@ INITIAL_LR=1e-5 # batch×2 → lr÷4 目前粤语如果batch size 8 。声调敏
 WARMUP_STEPS=100 # batch×2 → steps÷2 总样本数的4%左右
 RESUME_LR=0.0 # 恢复训练时的学习率，默认为0.0表示使用检查点中的学习率
 
+# 新增语言参数变量
+LANGUAGE=""
+
 # 新增预训练模型检查点变量
 PRETRAINED_CKPT=""
 PRETRAINED_CFM_CKPT=""
@@ -250,6 +253,12 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         
+        --language)
+            LANGUAGE="$2"
+            echo "设置语言参数: $LANGUAGE"
+            shift 2
+            ;;
+        
         --pretrained-ckpt)
             PRETRAINED_CKPT="$2"
             echo "设置 V1 预训练检查点: $PRETRAINED_CKPT"
@@ -298,6 +307,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --pretrained-ckpt       V1 版本预训练检查点路径"
             echo "  --pretrained-cfm-ckpt   V2 版本 CFM 预训练检查点路径"
             echo "  --pretrained-ar-ckpt    V2 版本 AR 预训练检查点路径"
+            
+            echo "  --language              设置语言参数 (例如: zh, yue, en)"
             
             echo "  -I, --interactive 交互式选择参数"
             exit 1
@@ -561,6 +572,17 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     fi
     echo "恢复学习率: $RESUME_LR"
     
+    # 询问语言参数
+    echo ""
+    echo "=== 语言参数 ==="
+    read -p "请输入语言参数 (例如: zh, yue, en，留空表示自动检测): " language_input
+    if [[ -n "$language_input" ]]; then
+        LANGUAGE="$language_input"
+        echo "语言参数: $LANGUAGE"
+    else
+        echo "使用自动语言检测"
+    fi
+    
     # 如果是V2版本，询问训练目标
     if [[ "$VERSION" = "v2" ]]; then
         echo ""
@@ -675,7 +697,14 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     echo "初始学习率: $INITIAL_LR"
     echo "预热步数: $WARMUP_STEPS"
     echo "恢复学习率: $RESUME_LR"
-
+    
+    # 显示语言参数
+    if [[ -n "$LANGUAGE" ]]; then
+        echo "语言参数: $LANGUAGE"
+    else
+        echo "语言参数: 自动检测"
+    fi
+    
     # 生成等效的非交互式命令行命令
     echo ""
     echo "=== 等效的非交互式命令行 ==="
@@ -717,6 +746,11 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     
     if [[ "$FP16" = true ]]; then
         CMD+=" --fp16"
+    fi
+    
+    # 添加语言参数
+    if [[ -n "$LANGUAGE" ]]; then
+        CMD+=" --language $LANGUAGE"
     fi
     
     # if [[ "$LR_ADJUST_INTERVAL" != "50" ]]; then
@@ -855,6 +889,11 @@ if [ "$VERSION" = "v1" ]; then
     # 添加预训练检查点参数
     if [[ -n "$PRETRAINED_CKPT" ]]; then
         TRAIN_ARGS+=" --pretrained-ckpt $PRETRAINED_CKPT"
+    fi
+    
+    # 添加语言参数
+    if [[ -n "$LANGUAGE" ]]; then
+        TRAIN_ARGS+=" --language $LANGUAGE"
     fi
     
     python train.py $TRAIN_ARGS
