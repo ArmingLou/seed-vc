@@ -709,7 +709,7 @@ class Trainer:
                     val_loss = self.validate()
                     if val_loss is not None:
                         if self.accelerator.is_main_process:
-                            print(f"Validation loss at step {self.iters}:【{val_loss}】")
+                            print(f"Validation loss at step {self.iters}:【{val_loss}】/「{self.ema_loss}」loss")
                         
                         # 早停机制
                         if val_loss < self.best_val_loss:
@@ -811,6 +811,7 @@ class Trainer:
                         # AR蒸馏损失
                         distill_loss += F.mse_loss(loss_ar, teacher_loss_ar.detach()) * 0.3  # AR知识蒸馏损失权重
                 loss_total = loss + distill_loss
+                self.ema_loss = loss_total.item()
 
                 self.accelerator.backward(loss_total)
 
@@ -905,7 +906,7 @@ class Trainer:
                     cur_lr = self.cosine_scheduler.get_last_lr()[0] if i != 0 else 0
 
                 # Log to console
-                print("Epoch %d, Step %d, Iteration %d, Loss: %.4f, Loss AR: %.4f, Loss CFM: %.4f, Grad Norm: %.4f, LR: %.6f"
+                print("Epoch %d, Step %d, Iteration %d, Loss: 「%.4f」, Loss AR: %.4f, Loss CFM: %.4f, Grad Norm: %.4f, LR: %.6f"
                       % (epoch, self.iters, i, loss.item(), loss_ar.item(), loss_cfm.item(), grad_norm_g, cur_lr))
                 
                 # 如果有验证集，也打印验证相关信息

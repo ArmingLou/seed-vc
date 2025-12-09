@@ -1166,13 +1166,13 @@ class Trainer:
                 if self.iters > 0 else loss
             )
             if self.iters % self.log_interval == 0:
-                print(f"epoch {self.epoch}, step {self.iters}, loss: {self.ema_loss}")
+                print(f"epoch {self.epoch}, step {self.iters}, loss: 「{self.ema_loss}」")
 
             # 验证和早停机制
             if self.val_dataloader and self.iters - self.warmup_steps > 0 and (self.iters - self.warmup_steps) % self.validation_interval == 0 :
                 val_loss = self.validate()
                 if val_loss is not None:
-                    print(f"Validation loss at step {self.iters}:【{val_loss}】")
+                    print(f"Validation loss at step {self.iters}: val_loss【{val_loss}】/「{self.ema_loss}」loss")
                     
                     # 早停机制
                     if val_loss < self.best_val_loss:
