@@ -194,7 +194,7 @@ def load_models(args):
                 "sampling_rate": 16000,
             }
             if args.language is not None:
-                print(f"正在使用语言参数: {args.language}")
+                # print(f"正在使用语言参数: {args.language}")
                 feature_extractor_args["language"] = args.language
             
             ori_inputs = whisper_feature_extractor([waves_16k.squeeze(0).cpu().numpy()],

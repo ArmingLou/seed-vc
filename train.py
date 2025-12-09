@@ -659,7 +659,7 @@ class Trainer:
                     "sampling_rate": 16000,
                 }
                 if language is not None:
-                    print(f"正在使用语言参数: {language}")
+                    # print(f"正在使用语言参数: {language}")
                     feature_extractor_args["language"] = language
                 
                 ori_inputs = self.whisper_feature_extractor(
