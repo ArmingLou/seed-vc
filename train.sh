@@ -770,6 +770,11 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
         CMD+=" --config \"$CONFIG\""
     fi
     
+    # 添加日志文件参数
+    if [[ -n "$LOG_FILE" ]]; then
+        CMD+=" --log-file $LOG_FILE"
+    fi
+    
     CMD+=" --${VERSION}"
     
     if [[ "$RUN_NAME" != "Test_ft" ]]; then
@@ -788,13 +793,6 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     if [[ -n "$LANGUAGE" ]]; then
         CMD+=" --language $LANGUAGE"
     fi
-    
-    # 添加日志文件参数
-    if [[ -n "$LOG_FILE" ]]; then
-        CMD+=" --log-file $LOG_FILE"
-    fi
-    
-
     
     # if [[ "$LR_ADJUST_INTERVAL" != "50" ]]; then
         CMD+=" --lr-adjust-interval $LR_ADJUST_INTERVAL"
