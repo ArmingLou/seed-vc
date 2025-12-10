@@ -1156,6 +1156,12 @@ class Trainer:
                 print("Reached max steps, stopping training")
                 return
             
+            if self.iters == 1:
+                # 整个训练开始前，先验证一次。只打印。
+                first_val_loss = self.validate()
+                print(f"First validation loss: 【{first_val_loss}】")
+                
+            
             # Ensure deterministic behavior by setting seeds based on current state
             seed = 1234 + self.iters
             random.seed(seed)
