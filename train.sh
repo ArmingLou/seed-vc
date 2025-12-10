@@ -878,42 +878,15 @@ fi
 export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
 export PYTORCH_ENABLE_MPS_FALLBACK=1
 export HF_HUB_OFFLINE=0
+export PYTHONUNBUFFERED=1
 
 # 日志输出函数
 run_with_logging() {
     # 默认始终在控制台显示日志
     # 只有当指定了日志文件路径且不为空时才同时保存到文件
     if [[ -n "$LOG_FILE" && "$LOG_FILE" != "" ]]; then
-        # 直接运行命令并将输出同时发送到控制台和日志文件
-        # 使用Python脚本处理实时日志记录和进度条过滤
-        PYTHON_LOG_SCRIPT=$(mktemp)
-        cat > "$PYTHON_LOG_SCRIPT" << EOF
-import sys
-
-log_file_path = sys.argv[1] if len(sys.argv) > 1 else ''
-if log_file_path:
-    log_file = open(log_file_path, 'a')
-
-try:
-    for line in sys.stdin:
-        # 输出到控制台（实时）
-        sys.stdout.write(line)
-        sys.stdout.flush()
-        
-        # 如果指定了日志文件且不是进度条，则写入日志文件
-        if log_file_path and '%|' not in line:
-            log_file.write(line)
-            log_file.flush()
-finally:
-    if log_file_path:
-        log_file.close()
-EOF
-        
-        # 运行命令并将输出通过Python脚本处理
-        "$@" 2>&1 | python "$PYTHON_LOG_SCRIPT" "$LOG_FILE"
-        
-        # 清理临时文件
-        rm -f "$PYTHON_LOG_SCRIPT"
+        # 使用 tee 和 awk 来实现实时日志记录，过滤进度条
+        "$@" 2>&1 | tee >(awk '!/%\|/ {print $0; fflush()}' >> "$LOG_FILE")
     else
         # 只在控制台显示日志
         "$@"
