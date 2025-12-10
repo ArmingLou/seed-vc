@@ -884,11 +884,11 @@ run_with_logging() {
     # 默认始终在控制台显示日志
     # 只有当指定了日志文件路径且不为空时才同时保存到文件
     if [[ -n "$LOG_FILE" && "$LOG_FILE" != "" ]]; then
-        # 使用 tee 和 awk 来实现实时日志记录，过滤进度条
-        "$@" 2>&1 | tee >(awk '!/%\|/ {print $0; fflush()}' >> "$LOG_FILE")
+        # 使用 stdbuf 禁用缓冲来实现实时日志记录，过滤进度条
+        stdbuf -oL -eL "$@" 2>&1 | tee >(awk '!/%\|/ {print $0; fflush()}' >> "$LOG_FILE")
     else
-        # 只在控制台显示日志
-        "$@"
+        # 只在控制台显示日志，同样禁用缓冲
+        stdbuf -oL -eL "$@"
     fi
 }
 
