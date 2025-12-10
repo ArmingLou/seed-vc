@@ -491,16 +491,16 @@ class Trainer:
             lr_diff = abs(new_lr - current_lr)
             # 只有当学习率变化足够大时才认为发生了调整（避免浮点数精度问题）
             if lr_diff > 1e-12:
-                print(f"Learning rate adjusted from {current_lr:.2e} to {new_lr:.2e}")
+                print(f"\nLearning rate adjusted from {current_lr:.2e} to {new_lr:.2e}")
             else:
                 # 在断点续训练时，仍然打印当前学习率以提供反馈
                 if self.iters >= self.warmup_steps:
-                    print(f"Learning rate remains at {new_lr:.2e} (cosine annealing phase)")
+                    print(f"\nLearning rate remains at {new_lr:.2e} (cosine annealing phase)")
                 else:
-                    print(f"Learning rate remains at {new_lr:.2e} (warmup phase)")
+                    print(f"\nLearning rate remains at {new_lr:.2e} (warmup phase)")
                 # 调试信息：显示实际的学习率差异
                 if lr_diff > 0:
-                    print(f"  Debug: Actual learning rate difference: {lr_diff:.2e}")
+                    print(f"\n  Debug: Actual learning rate difference: {lr_diff:.2e}")
 
     def build_sv_model(self, device, config):
         from modules.campplus.DTDNN import CAMPPlus
@@ -1112,7 +1112,6 @@ class Trainer:
             self.should_copy = False
             print("Reached max epochs, stopping training")
             return
-                
         # 为当前epoch设置数据集的随机索引序列
         self.train_dataset.set_epoch(self.epoch)
         for i, batch in enumerate(tqdm(self.train_dataloader)): 
@@ -1122,19 +1121,16 @@ class Trainer:
                 continue
             self.iters += 1
             
-            # 在tqdm循环的第一行添加print()，确保后续打印信息从新行开始
-            print()
-            
             if self.iters > self.max_steps:
                 self.should_stop = True
                 self.should_copy = False
-                print("Reached max steps, stopping training")
+                print("\nReached max steps, stopping training")
                 return
             
             if self.iters == 1:
                 # 整个训练开始前，先验证一次。只打印。
                 first_val_loss = self.validate()
-                print(f"First validation loss: 【{first_val_loss}】")
+                print(f"\nFirst validation loss: 【{first_val_loss}】")
                 
             
             # Ensure deterministic behavior by setting seeds based on current state
@@ -1156,19 +1152,19 @@ class Trainer:
                 if self.iters > 0 else loss
             )
             if self.iters % self.log_interval == 0:
-                print(f"epoch {self.epoch}, step {self.iters}, loss: 「{self.ema_loss}」")
+                print(f"\nepoch {self.epoch}, step {self.iters}, loss: 「{self.ema_loss}」")
 
             # 验证和早停机制
             if self.val_dataloader and self.iters - self.warmup_steps > 0 and (self.iters - self.warmup_steps) % self.validation_interval == 0 :
                 val_loss = self.validate()
                 if val_loss is not None:
-                    print(f"Validation loss at step {self.iters}: val_loss【{val_loss}】/「{self.ema_loss}」loss")
+                    print(f"\nValidation loss at step {self.iters}: val_loss【{val_loss}】/「{self.ema_loss}」loss")
                     
                     # 早停机制
                     if val_loss < self.best_val_loss:
                         self.best_val_loss = val_loss
                         self.patience_counter = 0
-                        print(f"Improved validation loss: 【{val_loss}】")
+                        print(f"\nImproved validation loss: 【{val_loss}】")
                         # 保存最佳模型
                         self._save_best_model()
                     else:
@@ -1208,7 +1204,7 @@ class Trainer:
             if self.iters >= self.max_steps:
                 self.should_copy = False
                 self.should_stop = True
-                print("Reached max steps, stopping training")
+                print("\nReached max steps, stopping training")
                 self._save_checkpoint()
                 return # 不归档，只保存检查点。
                 

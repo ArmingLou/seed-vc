@@ -653,18 +653,15 @@ class Trainer:
                     continue
                 self.iters += 1
                 
-                # 在tqdm循环的第一行添加print()，确保后续打印信息从新行开始
-                print()
-                
                 if self.iters > self.max_steps:
                     self.should_stop = True
-                    print("Reached max steps, stopping training")
+                    print("\nReached max steps, stopping training")
                     exit() # 无需归档，直接退出。
                     
                 if self.iters == 1:
                     # 整个训练开始前，先验证一次。只打印。
                     first_val_loss = self.validate()
-                    print(f"First validation loss: 【{first_val_loss}】")
+                    print(f"\nFirst validation loss: 【{first_val_loss}】")
                 
                 if not init_epoch:
                     self.model.train()
@@ -675,7 +672,7 @@ class Trainer:
                     self._process_batch(self.epoch, i, batch)
                 except RuntimeError as e:
                     if "FP16_LAYER_NORM_ERROR" in str(e) and self.requested_fp16:
-                        print(f"Warning: Encountered LayerNorm error with fp16 at step {self.iters}, falling back to fp32 training...")
+                        print(f"\nWarning: Encountered LayerNorm error with fp16 at step {self.iters}, falling back to fp32 training...")
                         # 实现真正的fp16到fp32的自动切换
                         self._fallback_to_fp32()
                         # 重新处理当前批次
@@ -689,18 +686,18 @@ class Trainer:
                     val_loss = self.validate()
                     if val_loss is not None:
                         if self.accelerator.is_main_process:
-                            print(f"Validation loss at step {self.iters}:【{val_loss}】/「{self.ema_loss}」loss")
+                            print(f"\nValidation loss at step {self.iters}:【{val_loss}】/「{self.ema_loss}」loss")
                         
                         # 早停机制
                         if val_loss < self.best_val_loss:
                             self.best_val_loss = val_loss
                             self.patience_counter = 0
                             if self.accelerator.is_main_process:
-                                print(f"Improved validation loss: 【{val_loss}】")
+                                print(f"\nImproved validation loss: 【{val_loss}】")
                                 # 保存最佳模型
                                 self._save_best_model()
                         else:
-                            print(f"Best validation loss: {self.best_val_loss}")
+                            print(f"\nBest validation loss: {self.best_val_loss}")
                             self.patience_counter += 1
                             if self.accelerator.is_main_process:
                                 print(f"No improvement in validation loss. Patience: {self.patience_counter}/{self.patience}")
@@ -717,7 +714,7 @@ class Trainer:
                                 return
                 
                 if self.iters >= self.max_steps and self.accelerator.is_main_process:
-                    print("Reached max steps, stopping training")
+                    print("\nReached max steps, stopping training")
                     self._save_checkpoint(self.epoch)
                     # 训练完成，设置标志位
                     self.training_completed = True
@@ -730,7 +727,7 @@ class Trainer:
 
             # Log epoch completion
             if self.accelerator.is_main_process:
-                print(f"Epoch {self.epoch} completed in {time.time() - epoch_start_time:.2f} seconds")
+                print(f"\nEpoch {self.epoch} completed in {time.time() - epoch_start_time:.2f} seconds")
             
             # 检查是否应该早停
             if self.should_stop:
