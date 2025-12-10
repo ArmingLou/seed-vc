@@ -27,68 +27,6 @@ from accelerate import DistributedDataParallelKwargs
 from accelerate.logging import get_logger
 
 
-class ManualProgressiveTrainer:
-    def __init__(self, config_path, run_name, **kwargs):
-        self.config_path = config_path
-        self.run_name = run_name
-        # 添加新的知识蒸馏参数
-        self.distill_ar = kwargs.pop('distill_ar', False)
-        self.distill_cfm = kwargs.pop('distill_cfm', False)
-        # 添加预训练检查点路径参数
-        self.pretrained_cfm_ckpt_path = kwargs.pop('pretrained_cfm_ckpt_path', None)
-        self.pretrained_ar_ckpt_path = kwargs.pop('pretrained_ar_ckpt_path', None)
-        self.kwargs = kwargs
-        self.current_trainer = None
-    
-    def train_single_dataset(self, dataset_dir, run_name_suffix=None):
-        """训练单个数据集，不进行自动检查点管理"""
-        # 直接使用传入的run_name，避免重复添加数据集名后缀
-        # Trainer类内部已经会处理数据集名后缀
-        version_run_name = self.run_name
-        
-        # 保存数据目录用于可能的重新初始化
-        self.dataset_dir = dataset_dir
-        
-        # 初始化训练器
-        self.current_trainer = Trainer(
-            config_path=self.config_path,
-            pretrained_cfm_ckpt_path=self.pretrained_cfm_ckpt_path,
-            pretrained_ar_ckpt_path=self.pretrained_ar_ckpt_path,
-            data_dir=dataset_dir,
-            run_name=version_run_name,
-            **self.kwargs
-        )
-        
-        # 开始训练，添加fp16错误处理
-        try:
-            self.current_trainer.train()
-        except RuntimeError as e:
-            original_fp16 = self.kwargs.get('fp16', False)
-            if "LayerNormKernelImpl" in str(e) and original_fp16:
-                print(f"Error: Encountered LayerNorm error with fp16 in progressive training. Attempting automatic fallback to fp32...")
-                # 尝试使用fp32重新训练
-                self.kwargs['fp16'] = False
-                print("Reinitializing trainer with fp32 precision...")
-                # 重新初始化训练器
-                self.current_trainer = Trainer(
-                    config_path=self.config_path,
-                    pretrained_cfm_ckpt_path=self.pretrained_cfm_ckpt_path,
-                    pretrained_ar_ckpt_path=self.pretrained_ar_ckpt_path,
-                    data_dir=self.dataset_dir,  # 使用原始数据目录
-                    run_name=self.run_name,  # 使用原始的run_name，避免重复添加数据集名后缀
-                    **self.kwargs
-                )
-                # 重新开始训练
-                self.current_trainer.train()
-            else:
-                raise e
-        
-        # 获取训练完成状态
-        training_completed = getattr(self.current_trainer, 'training_completed', False)
-        print(f"数据集训练完成。训练完成状态: {training_completed}")
-        return self.current_trainer.log_dir, training_completed
-
-
 class Trainer:
     def __init__(
             self,
@@ -514,11 +452,30 @@ class Trainer:
 
     def set_teacher_model(self, teacher_model_ar_path=None, teacher_model_cfm_path=None):
         """设置教师模型用于知识蒸馏"""
-        # 如果没有提供路径参数，则使用预训练检查点路径
-        if teacher_model_ar_path is None and self.pretrained_ar_ckpt_path:
-            teacher_model_ar_path = self.pretrained_ar_ckpt_path
-        if teacher_model_cfm_path is None and self.pretrained_cfm_ckpt_path:
-            teacher_model_cfm_path = self.pretrained_cfm_ckpt_path
+        # 如果没有提供路径参数，则根据是否启用蒸馏和训练来决定使用哪个模型
+        if teacher_model_ar_path is None:
+            # 只有在启用了AR蒸馏且需要训练AR模型时才加载教师模型
+            if self.distill_ar and self.train_ar:
+                if self.pretrained_ar_ckpt_path:
+                    # 如果指定了预训练检查点路径，则使用该路径
+                    teacher_model_ar_path = self.pretrained_ar_ckpt_path
+                else:
+                    # 如果没有指定预训练检查点，则使用默认模型
+                    from hf_utils import load_custom_model_from_hf
+                    teacher_model_ar_path = load_custom_model_from_hf("Plachta/Seed-VC", "v2/ar_base.pth", None)
+                    print(f"使用默认AR模型作为教师模型: {teacher_model_ar_path}")
+                
+        if teacher_model_cfm_path is None:
+            # 只有在启用了CFM蒸馏且需要训练CFM模型时才加载教师模型
+            if self.distill_cfm and self.train_cfm:
+                if self.pretrained_cfm_ckpt_path:
+                    # 如果指定了预训练检查点路径，则使用该路径
+                    teacher_model_cfm_path = self.pretrained_cfm_ckpt_path
+                else:
+                    # 如果没有指定预训练检查点，则使用默认模型
+                    from hf_utils import load_custom_model_from_hf
+                    teacher_model_cfm_path = load_custom_model_from_hf("Plachta/Seed-VC", "v2/cfm_small.pth", None)
+                    print(f"使用默认CFM模型作为教师模型: {teacher_model_cfm_path}")
             
         # 检查是否有教师模型需要加载
         # 只有在对应模型需要训练且启用了蒸馏时才检查教师模型文件
@@ -551,7 +508,6 @@ class Trainer:
                     print(f"  加载CFM检查点: {cfm_checkpoint_path}")
                 
                 # 加载检查点（根据训练参数决定加载哪一部分）
-                # 在教师模型加载时，不自动加载默认模型，只在明确指定了检查点路径时才加载
                 self.teacher_model.load_checkpoints(
                     cfm_checkpoint_path=cfm_checkpoint_path,
                     ar_checkpoint_path=ar_checkpoint_path,
@@ -1033,98 +989,51 @@ def main(args):
     if not args.config:
         args.config = './configs/v2/vc_wrapper.yaml'
         
-    # 检查是否启用知识蒸馏
-    # 在V2版本中，渐进式训练模式不支持知识蒸馏
-    # 只有在没有启用任何蒸馏时才使用渐进式训练模式
-    distill_enabled = args.distill_ar or args.distill_cfm
-    if not distill_enabled:
-        # 渐进式训练模式（无知识蒸馏）
-        print("启用渐进式训练模式（无知识蒸馏）")
-        manual_trainer = ManualProgressiveTrainer(
-            config_path=args.config,
-            run_name=args.run_name,
-            batch_size=args.batch_size,
-            steps=args.max_steps,
-            max_epochs=args.max_epochs,
-            save_interval=args.save_every,
-            num_workers=args.num_workers,
-            train_cfm=args.train_cfm,
-            train_ar=args.train_ar,
-            fp16=args.fp16,
-            val_dataset_dir=args.val_dataset_dir,
-            patience=args.patience,
-            validation_interval=args.validation_interval,
-            min_lr=args.min_lr,
-            lr_adjust_interval=args.lr_adjust_interval,
-            initial_lr=args.initial_lr,
-            warmup_steps=args.warmup_steps,
-            resume_lr=args.resume_lr,
-            language=args.language,
-            # 传递新的知识蒸馏参数
-            distill_ar=args.distill_ar,
-            distill_cfm=args.distill_cfm,
-            pretrained_cfm_ckpt_path=args.pretrained_cfm_ckpt,
-            pretrained_ar_ckpt_path=args.pretrained_ar_ckpt,
-        )
-        
-        # 训练单个数据集，添加fp16错误处理
-        try:
-            log_dir, training_completed = manual_trainer.train_single_dataset(args.dataset_dir)
-        except RuntimeError as e:
-            if "LayerNormKernelImpl" in str(e) and args.fp16:
-                print(f"Error: Encountered LayerNorm error with fp16 in progressive training. Consider disabling fp16 or let the system auto-switch to fp32.")
-                # 可以选择重新尝试使用fp32训练
-                # 这里我们只是提醒用户，实际的自动切换在Trainer内部处理
-            else:
-                raise e
-    else:
-        # 普通训练模式（启用知识蒸馏）
-        print("启用普通训练模式（启用知识蒸馏）")
-        print("  启用知识蒸馏:")
-        if args.distill_ar:
-            print("    AR模型蒸馏: 是")
-        if args.distill_cfm:
-            print("    CFM模型蒸馏: 是")
-        trainer = Trainer(
-            config_path=args.config,
-            pretrained_cfm_ckpt_path=args.pretrained_cfm_ckpt,
-            pretrained_ar_ckpt_path=args.pretrained_ar_ckpt,
-            data_dir=args.dataset_dir,
-            run_name=args.run_name,
-            batch_size=args.batch_size,
-            steps=args.max_steps,
-            max_epochs=args.max_epochs,
-            save_interval=args.save_every,
-            num_workers=args.num_workers,
-            train_cfm=args.train_cfm,
-            train_ar=args.train_ar,
-            fp16=args.fp16,
-            val_dataset_dir=args.val_dataset_dir,
-            patience=args.patience,
-            validation_interval=args.validation_interval,
-            min_lr=args.min_lr,
-            lr_adjust_interval=args.lr_adjust_interval,
-            initial_lr=args.initial_lr,
-            warmup_steps=args.warmup_steps,
-            resume_lr=args.resume_lr,
-            language=args.language,
-            # 传递新的知识蒸馏参数
-            distill_ar=args.distill_ar,
-            distill_cfm=args.distill_cfm,
-        )
-        # 添加fp16错误处理
-        try:
-            trainer.train()
-        except RuntimeError as e:
-            if "LayerNormKernelImpl" in str(e) and args.fp16:
-                print(f"Error: Encountered LayerNorm error with fp16 in training. The system should automatically switch to fp32.")
-                # 实际的自动切换在Trainer内部处理
-            else:
-                raise e
-        
-        # 获取日志目录和训练完成状态
-        log_dir = trainer.log_dir
-        training_completed = getattr(trainer, 'training_completed', False)
+    # 统一使用Trainer进行训练，无论是否启用知识蒸馏
+    # 使用数据集目录名作为后缀，保持一致的输出目录结构
+    dataset_name = os.path.basename(os.path.normpath(args.dataset_dir))
+    version_run_name = f"{args.run_name}_{dataset_name}"
+    
+    trainer = Trainer(
+        config_path=args.config,
+        pretrained_cfm_ckpt_path=args.pretrained_cfm_ckpt,
+        pretrained_ar_ckpt_path=args.pretrained_ar_ckpt,
+        data_dir=args.dataset_dir,
+        run_name=version_run_name,
+        batch_size=args.batch_size,
+        steps=args.max_steps,
+        max_epochs=args.max_epochs,
+        save_interval=args.save_every,
+        num_workers=args.num_workers,
+        train_cfm=args.train_cfm,
+        train_ar=args.train_ar,
+        fp16=args.fp16,
+        val_dataset_dir=args.val_dataset_dir,
+        patience=args.patience,
+        validation_interval=args.validation_interval,
+        min_lr=args.min_lr,
+        lr_adjust_interval=args.lr_adjust_interval,
+        initial_lr=args.initial_lr,
+        warmup_steps=args.warmup_steps,
+        resume_lr=args.resume_lr,
+        language=args.language,
+        # 传递新的知识蒸馏参数
+        distill_ar=args.distill_ar,
+        distill_cfm=args.distill_cfm,
+    )
+    # 添加fp16错误处理
+    try:
+        trainer.train()
+    except RuntimeError as e:
+        if "LayerNormKernelImpl" in str(e) and args.fp16:
+            print(f"Error: Encountered LayerNorm error with fp16 in training. The system should automatically switch to fp32.")
+            # 实际的自动切换在Trainer内部处理
+        else:
+            raise e
+    
+    # 获取日志目录和训练完成状态
+    log_dir = trainer.log_dir
+    training_completed = getattr(trainer, 'training_completed', False)
     
     # 训练完成后，将最终模型和配置文件拷贝到基础运行目录
     copy_final_models(log_dir, args.run_name, args.train_cfm, args.train_ar, args.config, training_completed)

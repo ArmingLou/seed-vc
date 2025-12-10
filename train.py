@@ -23,55 +23,6 @@ from data.ft_dataset import build_ft_dataloader
 from hf_utils import load_custom_model_from_hf
 
 
-class ManualProgressiveTrainer:
-    def __init__(self, config_path, run_name, teacher_model_path=None, **kwargs):
-        self.config_path = config_path
-        self.run_name = run_name
-        self.teacher_model_path = teacher_model_path
-        # 提取resume_lr参数（如果存在）
-        self.resume_lr = kwargs.pop('resume_lr', 0.0)
-        self.kwargs = kwargs
-        self.current_trainer = None
-    
-    def train_single_dataset(self, dataset_dir, run_name_suffix=None):
-        """训练单个数据集，不进行自动检查点管理"""
-        # 构建运行名称
-        if run_name_suffix:
-            version_run_name = f"{self.run_name}_{run_name_suffix}"
-        else:
-            # 使用数据集目录名作为后缀
-            dataset_name = os.path.basename(os.path.normpath(dataset_dir))
-            version_run_name = f"{self.run_name}_{dataset_name}"
-        
-        # 使用指定的教师模型作为预训练检查点
-        pretrained_ckpt = self.teacher_model_path
-        
-        # 初始化训练器
-        self.current_trainer = Trainer(
-            config_path=self.config_path,
-            pretrained_ckpt_path=pretrained_ckpt,
-            data_dir=dataset_dir,
-            run_name=version_run_name,
-            resume_lr=self.resume_lr,
-            **self.kwargs
-        )
-        
-        # 如果指定了教师模型，设置为教师模型用于知识蒸馏
-        if self.teacher_model_path:
-            self.current_trainer.set_teacher_model(self.teacher_model_path)        
-        # 开始训练
-        self.current_trainer.train()
-        
-        # 训练完成后，将ft_model.pth和配置文件拷贝到基础运行目录
-        # 使用与V2版本一致的归档逻辑
-        copy_final_models(self.current_trainer.log_dir, self.run_name, self.config_path, self.current_trainer.should_copy)
-                
-        # 返回最终模型路径
-        final_model_path = os.path.join(os.path.dirname(self.current_trainer.log_dir), self.run_name, 'ft_model.pth')
-        print(f"数据集训练完成。最终模型: {final_model_path}")
-        return final_model_path
-
-
 class Trainer:
     def __init__(self,
                  config_path,
@@ -95,6 +46,7 @@ class Trainer:
                  teacher_model_path=None,  # 添加教师模型路径参数
                  resume_lr=0.0,  # 添加resume_lr参数，默认值为0.0
                  language=None,  # 添加language参数，默认值为None
+                 distill=False,  # 添加distill参数，默认值为False
                  ):
         self.device = torch.device(device)
         self.fp16 = fp16
@@ -134,6 +86,7 @@ class Trainer:
         self.warmup_steps = warmup_steps  # 学习率预热步数
         self.resume_lr = resume_lr  # resume_lr参数
         self.best_train_loss = float('inf')  # 用于学习率调度的最佳训练损失
+        self.distill = distill  # 添加distill参数
         # 注意：不要在这里初始化 switched_to_val_scheduler，因为它会在检查点恢复时被设置
         # 但是在 fresh training 的情况下需要初始化
         # 使用 hasattr 检查是否已经设置过，避免覆盖检查点中恢复的值
@@ -470,6 +423,17 @@ class Trainer:
 
         # 初始化教师模型（用于知识蒸馏）
         self.teacher_model = None
+        
+        # 如果启用了蒸馏，设置教师模型用于知识蒸馏
+        if self.distill:
+            # 如果没有指定教师模型路径，则使用默认模型作为教师模型
+            if teacher_model_path:
+                self.set_teacher_model(teacher_model_path)
+            else:
+                # 加载配置以获取默认模型路径
+                if config.get('pretrained_model', ''):
+                    default_model_path = load_custom_model_from_hf("Plachta/Seed-VC", config['pretrained_model'], None)
+                    self.set_teacher_model(default_model_path)
 
     def _init_lr_scheduler(self):
         """初始化学习率调度器"""
@@ -1346,68 +1310,40 @@ def main(args):
     if not args.config:
         args.config = './configs/presets/config_dit_mel_seed_uvit_xlsr_tiny.yml'
     
-    # 检查是否启用知识蒸馏
-    if args.distill:
-        # 渐进式训练模式（启用知识蒸馏）
-        print("启用渐进式训练模式（启用知识蒸馏）")
-        manual_trainer = ManualProgressiveTrainer(
-            config_path=args.config,
-            run_name=args.run_name,
-            teacher_model_path=args.pretrained_ckpt,  # 使用pretrained_ckpt作为教师模型路径
-            batch_size=args.batch_size,
-            steps=args.max_steps,
-            max_epochs=args.max_epochs,
-            save_interval=args.save_every,
-            num_workers=args.num_workers,
-            device=device_str,
-            fp16=args.fp16,
-            val_dataset_dir=args.val_dataset_dir,
-            patience=args.patience,
-            validation_interval=args.validation_interval,
-            min_lr=args.min_lr,
-            lr_adjust_interval=args.lr_adjust_interval,
-            initial_lr=args.initial_lr,
-            warmup_steps=args.warmup_steps,
-            resume_lr=args.resume_lr,
-            language=args.language,
-        )
-        
-        # 训练数据集
-        manual_trainer.train_single_dataset(args.dataset_dir, None)
-    else:
-        # 普通训练模式（不启用知识蒸馏）
-        # 使用数据集目录名作为后缀，保持与渐进式训练一致的输出目录结构
-        dataset_name = os.path.basename(os.path.normpath(args.dataset_dir))
-        version_run_name = f"{args.run_name}_{dataset_name}"
-        
-        trainer = Trainer(
-            config_path=args.config,
-            pretrained_ckpt_path=args.pretrained_ckpt,
-            data_dir=args.dataset_dir,
-            run_name=version_run_name,
-            batch_size=args.batch_size,
-            steps=args.max_steps,
-            max_epochs=args.max_epochs,
-            save_interval=args.save_every,
-            num_workers=args.num_workers,
-            device=device_str,
-            fp16=args.fp16,
-            val_dataset_dir=args.val_dataset_dir,
-            patience=args.patience,
-            validation_interval=args.validation_interval,
-            min_lr=args.min_lr,
-            lr_adjust_interval=args.lr_adjust_interval,
-            initial_lr=args.initial_lr,
-            warmup_steps=args.warmup_steps,
-            resume_lr=args.resume_lr,
-            language=args.language,
-            teacher_model_path=args.pretrained_ckpt if args.distill else None,  # 根据distill参数决定是否传递教师模型路径
-        )
-        trainer.train()
-        
-        # 训练完成后，将ft_model.pth和配置文件拷贝到基础运行目录
-        # 使用与V2版本一致的归档逻辑
-        copy_final_models(trainer.log_dir, args.run_name, args.config, trainer.should_copy)    
+    # 统一使用Trainer进行训练，无论是否启用知识蒸馏
+    # 使用数据集目录名作为后缀，保持一致的输出目录结构
+    dataset_name = os.path.basename(os.path.normpath(args.dataset_dir))
+    version_run_name = f"{args.run_name}_{dataset_name}"
+    
+    trainer = Trainer(
+        config_path=args.config,
+        pretrained_ckpt_path=args.pretrained_ckpt,
+        data_dir=args.dataset_dir,
+        run_name=version_run_name,
+        batch_size=args.batch_size,
+        steps=args.max_steps,
+        max_epochs=args.max_epochs,
+        save_interval=args.save_every,
+        num_workers=args.num_workers,
+        device=device_str,
+        fp16=args.fp16,
+        val_dataset_dir=args.val_dataset_dir,
+        patience=args.patience,
+        validation_interval=args.validation_interval,
+        min_lr=args.min_lr,
+        lr_adjust_interval=args.lr_adjust_interval,
+        initial_lr=args.initial_lr,
+        warmup_steps=args.warmup_steps,
+        resume_lr=args.resume_lr,
+        language=args.language,
+        teacher_model_path=args.pretrained_ckpt,  # 传递教师模型路径
+        distill=args.distill,  # 添加distill参数
+    )
+    trainer.train()
+    
+    # 训练完成后，将ft_model.pth和配置文件拷贝到基础运行目录
+    # 使用与V2版本一致的归档逻辑
+    copy_final_models(trainer.log_dir, args.run_name, args.config, trainer.should_copy)    
 if __name__ == '__main__':
     # Set multiprocessing start method to avoid 'Too many open files' error on macOS
     if sys.platform == 'darwin':  # macOS
