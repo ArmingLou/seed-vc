@@ -131,6 +131,11 @@ PRETRAINED_CKPT=""
 PRETRAINED_CFM_CKPT=""
 PRETRAINED_AR_CKPT=""
 
+# 日志文件路径
+LOG_FILE=""
+
+
+
 while [[ $# -gt 0 ]]; do
     case $1 in
         --gpu|-G)
@@ -276,6 +281,12 @@ while [[ $# -gt 0 ]]; do
             echo "设置 V2 AR 预训练检查点: $PRETRAINED_AR_CKPT"
             shift 2
             ;;
+        --log-file)
+            LOG_FILE="$2"
+            echo "设置日志文件: $LOG_FILE"
+            shift 2
+            ;;
+
         *)
             echo "未知参数: $1"
             echo "用法: $0 [--gpu|-G] [--v1|--v2] [--run-name|-n NAME] [--config|-c CONFIG_PATH] [--dataset-dir|-d DATASET_PATH] [--val-dataset-dir|--val-dir VAL_DATASET_PATH] [--max-steps|-s STEPS] [--max-epochs|-e EPOCHS] [--save-every|-S INTERVAL] [--patience|-p PATIENCE] [--validation-interval|-v INTERVAL] [--train-cfm] [--train-ar] [--distill] [--distill-ar] [--distill-cfm] [--min-lr MIN_LR] [--lr-adjust-interval LR_ADJUST_INTERVAL] [--initial-lr INITIAL_LR] [--warmup-steps WARMUP_STEPS] [--pretrained-ckpt CKPT_PATH] [--pretrained-cfm-ckpt CFM_CKPT_PATH] [--pretrained-ar-ckpt AR_CKPT_PATH]"
@@ -309,6 +320,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --pretrained-ar-ckpt    V2 版本 AR 预训练检查点路径"
             
             echo "  --language              设置语言参数 (例如: zh, yue, en)"
+            
+            echo "  --log-file              设置日志文件路径 (默认: 不保存日志文件)"
             
             echo "  -I, --interactive 交互式选择参数"
             exit 1
@@ -583,6 +596,20 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
         echo "使用自动语言检测"
     fi
     
+    # 询问日志文件路径
+    echo ""
+    echo "=== 日志文件 ==="
+    read -p "请输入日志文件路径 (留空表示不保存日志文件): " log_file_input
+    if [[ -n "$log_file_input" ]]; then
+        LOG_FILE="$log_file_input"
+        echo "日志文件: $LOG_FILE"
+    else
+        LOG_FILE=""
+        echo "不保存日志文件"
+    fi
+    
+
+    
     # 如果是V2版本，询问训练目标
     if [[ "$VERSION" = "v2" ]]; then
         echo ""
@@ -705,6 +732,15 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
         echo "语言参数: 自动检测"
     fi
     
+    # 显示日志文件
+    if [[ -n "$LOG_FILE" ]]; then
+        echo "日志文件: $LOG_FILE"
+    else
+        echo "日志文件: 不保存日志文件"
+    fi
+    
+
+    
     # 生成等效的非交互式命令行命令
     echo ""
     echo "=== 等效的非交互式命令行 ==="
@@ -752,6 +788,13 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     if [[ -n "$LANGUAGE" ]]; then
         CMD+=" --language $LANGUAGE"
     fi
+    
+    # 添加日志文件参数
+    if [[ -n "$LOG_FILE" ]]; then
+        CMD+=" --log-file $LOG_FILE"
+    fi
+    
+
     
     # if [[ "$LR_ADJUST_INTERVAL" != "50" ]]; then
         CMD+=" --lr-adjust-interval $LR_ADJUST_INTERVAL"
@@ -838,6 +881,19 @@ export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
 export PYTORCH_ENABLE_MPS_FALLBACK=1
 export HF_HUB_OFFLINE=0
 
+# 日志输出函数
+run_with_logging() {
+    # 默认始终在控制台显示日志
+    # 只有当指定了日志文件路径且不为空时才同时保存到文件
+    if [[ -n "$LOG_FILE" && "$LOG_FILE" != "" ]]; then
+        # 同时在控制台显示日志并保存到文件
+        "$@" 2>&1 | tee "$LOG_FILE"
+    else
+        # 只在控制台显示日志
+        "$@"
+    fi
+}
+
 # export HUGGING_FACE_HUB_TOKEN={从https://huggingface.co/settings/tokens获取}
 export HUGGING_FACE_HUB_TOKEN=
 
@@ -896,7 +952,7 @@ if [ "$VERSION" = "v1" ]; then
         TRAIN_ARGS+=" --language $LANGUAGE"
     fi
     
-    python train.py $TRAIN_ARGS
+    run_with_logging python train.py $TRAIN_ARGS
 else
     
     # 构建V2的训练参数
@@ -963,7 +1019,7 @@ else
         # 强制使用cpu
         export FORCE_CPU=1
          # 直接使用Python运行，避免accelerate命令的问题
-         python $V2_SCRIPT $CONFIG_PARAM \
+        run_with_logging python $V2_SCRIPT $CONFIG_PARAM \
             --dataset-dir $DATASET_DIR \
             --run-name $RUN_NAME \
             --batch-size 8 \
@@ -977,7 +1033,7 @@ else
         # 检查是否有Intel GPU可用
         if python -c "import torch; exit(0 if hasattr(torch, 'xpu') and torch.xpu.is_available() else 1)"; then
             # 使用Intel GPU运行
-            accelerate launch $V2_SCRIPT $CONFIG_PARAM \
+            run_with_logging accelerate launch $V2_SCRIPT $CONFIG_PARAM \
                 --dataset-dir $DATASET_DIR \
                 --run-name $RUN_NAME \
                 --batch-size 8 \
@@ -990,7 +1046,7 @@ else
             # 检查是否有NVIDIA GPU可用
             if nvidia-smi &> /dev/null; then
                 # 使用NVIDIA GPU运行
-                accelerate launch $V2_SCRIPT $CONFIG_PARAM \
+                run_with_logging accelerate launch $V2_SCRIPT $CONFIG_PARAM \
                     --dataset-dir $DATASET_DIR \
                     --run-name $RUN_NAME \
                     --batch-size 8 \
@@ -1002,7 +1058,7 @@ else
             else
                 # 回退到CPU运行
                 export FORCE_CPU=1
-                python $V2_SCRIPT $CONFIG_PARAM \
+                run_with_logging python $V2_SCRIPT $CONFIG_PARAM \
                     --dataset-dir $DATASET_DIR \
                     --run-name $RUN_NAME \
                     --batch-size 8 \

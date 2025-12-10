@@ -1082,6 +1082,7 @@ class Trainer:
             f'DiT_epoch_{save_epoch:05d}_step_{self.iters:05d}.pth'
         )
         torch.save(state, save_path)
+        print(f"Checkpoint saved at {save_path}")
 
         # find all checkpoints and remove old ones
         checkpoints = glob.glob(os.path.join(self.log_dir, 'DiT_epoch_*.pth'))

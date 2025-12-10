@@ -911,7 +911,7 @@ class Trainer:
             print(f"Saved AR checkpoint to {save_path}")
 
             # Find all checkpoints and remove old ones
-            self._remove_old_checkpoints("AR_epoch_*_step_*.pth", max_keep=1)
+            self._remove_old_checkpoints("AR_epoch_*_step_*.pth", max_keep=2)
         if self.train_cfm:
             state = {
                 'net': {
@@ -925,7 +925,7 @@ class Trainer:
             print(f"Saved CFM checkpoint to {save_path}")
 
             # Find all checkpoints and remove old ones
-            self._remove_old_checkpoints("CFM_epoch_*_step_*.pth", max_keep=1)
+            self._remove_old_checkpoints("CFM_epoch_*_step_*.pth", max_keep=2)
             
     def _remove_old_checkpoints(self, name_pattern, max_keep=1):
         """Remove old checkpoints"""
