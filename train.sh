@@ -885,12 +885,13 @@ run_with_logging() {
     # 默认始终在控制台显示日志
     # 只有当指定了日志文件路径且不为空时才同时保存到文件
     if [[ -n "$LOG_FILE" && "$LOG_FILE" != "" ]]; then
-        # 使用 tee 和 awk 来实现实时日志记录，过滤进度条
-        # "$@" 2>&1 | tee >(awk '!/%\|/ {print $0; fflush()}' >> "$LOG_FILE")
-        "$@" 2>&1 | awk '!/%\|/ {print $0; fflush()}' | tee -a "$LOG_FILE"
+        # 使用 stdbuf 强制所有输出使用行缓冲 (-oL) 或完全无缓冲 (-o0)
+        # 我们这里使用行缓冲 (-oL)，因为它对性能影响最小，且能解决实时性问题
+        # 将 stdbuf 应用到 tee 上游的命令，以及 tee 内部的 awk 上
+        stdbuf -oL "$@" 2>&1 | tee >(stdbuf -oL awk '!/%\|/ {print $0; fflush()}' >> "$LOG_FILE")
     else
-        # 只在控制台显示日志
-        "$@"
+        # 只在控制台显示日志（也可以在这里使用 stdbuf）
+        stdbuf -oL "$@"
     fi
 }
 
