@@ -1116,6 +1116,8 @@ class Trainer:
         # 为当前epoch设置数据集的随机索引序列
         self.train_dataset.set_epoch(self.epoch)
         for i, batch in enumerate(tqdm(self.train_dataloader)): 
+            # 在tqdm循环的第一行添加print()，确保后续打印信息从新行开始
+            print()
             
             stepInEpoch = self.iters % len(self.train_dataloader)
             if stepInEpoch != i:
