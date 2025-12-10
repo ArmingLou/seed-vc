@@ -603,6 +603,9 @@ class Trainer:
             save_path = os.path.join(self.log_dir, 'ar_best.pth')
             torch.save(state, save_path)
             print(f"Best AR model saved at {save_path}")
+            # 同时保存 文本内容：
+            with open(os.path.join(self.log_dir, 'ar_best_log.txt'), 'w') as f:
+                f.write(f'AR_epoch_{self.epoch:05d}_step_{self.iters:05d}.pth')
         
         if self.train_cfm:
             state = {
@@ -615,6 +618,9 @@ class Trainer:
             save_path = os.path.join(self.log_dir, 'cfm_best.pth')
             torch.save(state, save_path)
             print(f"Best CFM model saved at {save_path}")
+            # 同时保存 文本内容：
+            with open(os.path.join(self.log_dir, 'cfm_best_log.txt'), 'w') as f:
+                f.write(f'CFM_epoch_{self.epoch:05d}_step_{self.iters:05d}.pth')
 
     def train(self):
         """Main training loop"""
@@ -690,6 +696,7 @@ class Trainer:
                                 # 保存最佳模型
                                 self._save_best_model()
                         else:
+                            print(f"Best validation loss: {self.best_val_loss}")
                             self.patience_counter += 1
                             if self.accelerator.is_main_process:
                                 print(f"No improvement in validation loss. Patience: {self.patience_counter}/{self.patience}")

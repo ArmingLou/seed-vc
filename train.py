@@ -1059,6 +1059,9 @@ class Trainer:
         save_path = os.path.join(self.log_dir, 'best_model.pth')
         torch.save(state, save_path)
         print(f"Best model saved at {save_path}")
+        # 同时保存 文本内容： f'DiT_epoch_{save_epoch:05d}_step_{self.iters:05d}.pth' 到 best_model_log.txt文件
+        with open(os.path.join(self.log_dir, 'best_model_log.txt'), 'w') as f:
+            f.write(f'DiT_epoch_{self.epoch:05d}_step_{self.iters:05d}.pth')
 
     def _save_checkpoint(self):
         print('Saving..')
@@ -1166,6 +1169,7 @@ class Trainer:
                         # 保存最佳模型
                         self._save_best_model()
                     else:
+                        print(f"Best validation loss: {self.best_val_loss}")
                         self.patience_counter += 1
                         print(f"No improvement in validation loss. Patience: {self.patience_counter}/{self.patience}")
                         
