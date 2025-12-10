@@ -220,6 +220,7 @@ class Trainer:
                     state = torch.load(latest_checkpoint, map_location="cpu")
                     if 'best_val_loss' in state:
                         self.best_val_loss = state['best_val_loss']
+                        print(f"Loaded best_val_loss: {self.best_val_loss}")
                     if 'patience_counter' in state:
                         if self.resume_lr > 0.0:
                             #强制设置 恢复学习率时， 也强制重置 早停耐心计数器。
@@ -227,6 +228,7 @@ class Trainer:
                             self.patience_counter = 0
                         else:
                             self.patience_counter = state['patience_counter']
+                            print(f"Loaded patience_counter: {self.patience_counter}")
                     if 'ema_loss' in state:
                         self.ema_loss = state['ema_loss']
                     else:
@@ -243,6 +245,7 @@ class Trainer:
                     # 恢复学习率相关状态
                     if 'best_train_loss' in state:
                         self.best_train_loss = state['best_train_loss']
+                        print(f"Loaded best_train_loss: {self.best_train_loss}")
                     # 区分新训练和断点续训练的情况
                     if os.path.basename(latest_checkpoint).startswith("DiT_epoch_"):
                         # warmup_steps始终使用命令行参数
