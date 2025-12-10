@@ -25,6 +25,7 @@ from contextlib import nullcontext
 from accelerate import Accelerator
 from accelerate import DistributedDataParallelKwargs
 from accelerate.logging import get_logger
+import datetime
 
 
 class Trainer:
@@ -614,6 +615,8 @@ class Trainer:
 
     def train(self):
         """Main training loop"""
+        
+        print(f"Starting training from epoch {self.epoch}, step {self.iters} At {datetime.datetime.now()}")
         
         for epoch in range(self.max_epochs):
             epoch_start_time = time.time()

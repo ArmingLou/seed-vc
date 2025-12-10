@@ -16,6 +16,7 @@ import torchaudio.compliance.kaldi as kaldi
 import glob
 from tqdm import tqdm
 import shutil
+import datetime
 
 from modules.commons import recursive_munch, build_model, load_checkpoint
 from optimizers import build_optimizer
@@ -1216,7 +1217,7 @@ class Trainer:
         # self.epoch represents the epoch index (0-based)
         # For logging, we use the same value
         start_epoch = self.epoch
-        print(f"Starting training from epoch {start_epoch}, step {self.iters}")
+        print(f"Starting training from epoch {start_epoch}, step {self.iters} At {datetime.datetime.now()}")
         
         # Ensure deterministic behavior by setting seeds based on current state
         seed = 1234 + self.iters
