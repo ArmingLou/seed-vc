@@ -131,6 +131,10 @@ PRETRAINED_CKPT=""
 PRETRAINED_CFM_CKPT=""
 PRETRAINED_AR_CKPT=""
 
+# 新增梯度裁剪参数和蒸馏温度参数
+GRAD_CLIP_NORM=1.0
+DISTILL_TEMPERATURE=1.0
+
 # 日志文件路径
 LOG_FILE=""
 
@@ -286,6 +290,16 @@ while [[ $# -gt 0 ]]; do
             echo "设置日志文件: $LOG_FILE"
             shift 2
             ;;
+        --grad-clip-norm)
+            GRAD_CLIP_NORM="$2"
+            echo "设置梯度裁剪范数: $GRAD_CLIP_NORM"
+            shift 2
+            ;;
+        --distill-temperature)
+            DISTILL_TEMPERATURE="$2"
+            echo "设置蒸馏温度: $DISTILL_TEMPERATURE"
+            shift 2
+            ;;
 
         *)
             echo "未知参数: $1"
@@ -322,6 +336,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --language              设置语言参数 (例如: zh, yue, en)"
             
             echo "  --log-file              设置日志文件路径 (默认: 不保存日志文件)"
+            echo "  --grad-clip-norm        设置梯度裁剪范数 (默认: 1.0)"
+            echo "  --distill-temperature   设置蒸馏温度 (默认: 1.0)"
             
             echo "  -I, --interactive 交互式选择参数"
             exit 1
@@ -332,7 +348,7 @@ done
 # 检查必填参数
 if [[ -z "$DATASET_DIR" && "$INTERACTIVE_MODE" = false ]]; then
     echo "错误: 数据集目录 (--dataset-dir|-d) 是必填参数"
-    echo "用法: $0 [--gpu|-G] [--v1|--v2] [--run-name|-n NAME] [--config|-c CONFIG_PATH] --dataset-dir|-d DATASET_PATH [--val-dataset-dir|--val-dir VAL_DATASET_PATH] [--max-steps|-s STEPS] [--max-epochs|-e EPOCHS] [--save-every|-S INTERVAL] [--patience|-p PATIENCE] [--validation-interval|-v INTERVAL] [--pretrained-ckpt CKPT_PATH] [--pretrained-cfm-ckpt CFM_CKPT_PATH] [--pretrained-ar-ckpt AR_CKPT_PATH]"
+    echo "用法: $0 [--gpu|-G] [--v1|--v2] [--run-name|-n NAME] [--config|-c CONFIG_PATH] --dataset-dir|-d DATASET_PATH [--val-dataset-dir|--val-dir VAL_DATASET_PATH] [--max-steps|-s STEPS] [--max-epochs|-e EPOCHS] [--save-every|-S INTERVAL] [--patience|-p PATIENCE] [--validation-interval|-v INTERVAL] [--pretrained-ckpt CKPT_PATH] [--pretrained-cfm-ckpt CFM_CKPT_PATH] [--pretrained-ar-ckpt AR_CKPT_PATH] [--grad-clip-norm NORM] [--distill-temperature TEMP]"
     exit 1
 fi
 
@@ -608,7 +624,27 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
         echo "不保存日志文件"
     fi
     
-
+    # 询问梯度裁剪范数
+    echo ""
+    echo "=== 梯度裁剪参数 ==="
+    read -p "请输入梯度裁剪范数 (默认: 1.0): " grad_clip_norm_input
+    if [[ -n "$grad_clip_norm_input" ]]; then
+        GRAD_CLIP_NORM="$grad_clip_norm_input"
+    else
+        GRAD_CLIP_NORM=1.0
+    fi
+    echo "梯度裁剪范数: $GRAD_CLIP_NORM"
+    
+    # 询问蒸馏温度
+    echo ""
+    echo "=== 蒸馏温度参数 ==="
+    read -p "请输入蒸馏温度 (默认: 1.0): " distill_temperature_input
+    if [[ -n "$distill_temperature_input" ]]; then
+        DISTILL_TEMPERATURE="$distill_temperature_input"
+    else
+        DISTILL_TEMPERATURE=1.0
+    fi
+    echo "蒸馏温度: $DISTILL_TEMPERATURE"
     
     # 如果是V2版本，询问训练目标
     if [[ "$VERSION" = "v2" ]]; then
@@ -849,6 +885,10 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
         fi
     fi
     
+    # 添加梯度裁剪范数和蒸馏温度参数
+    CMD+=" --grad-clip-norm $GRAD_CLIP_NORM"
+    CMD+=" --distill-temperature $DISTILL_TEMPERATURE"
+    
     if [[ "$VERSION" = "v2" ]]; then
         if [[ -n "$TRAIN_CFM_ARG" ]]; then
             CMD+=" $TRAIN_CFM_ARG"
@@ -953,6 +993,10 @@ if [ "$VERSION" = "v1" ]; then
         TRAIN_ARGS+=" --language $LANGUAGE"
     fi
     
+    # 添加梯度裁剪范数和蒸馏温度参数
+    TRAIN_ARGS+=" --grad-clip-norm $GRAD_CLIP_NORM"
+    TRAIN_ARGS+=" --distill-temperature $DISTILL_TEMPERATURE"
+    
     run_with_logging python train.py $TRAIN_ARGS
 else
     
@@ -1006,6 +1050,10 @@ else
     if [[ "$DISTILL_CFM" != "0.0" ]]; then
         V2_TRAIN_ARGS+=" --distill-cfm $DISTILL_CFM"
     fi
+    
+    # 添加梯度裁剪范数和蒸馏温度参数
+    V2_TRAIN_ARGS+=" --grad-clip-norm $GRAD_CLIP_NORM"
+    V2_TRAIN_ARGS+=" --distill-temperature $DISTILL_TEMPERATURE"
     
     # 使用统一的训练脚本
     V2_SCRIPT="train_v2.py"

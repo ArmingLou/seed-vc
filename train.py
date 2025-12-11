@@ -48,7 +48,9 @@ class Trainer:
                  resume_lr=0.0,  # 添加resume_lr参数，默认值为0.0
                  language=None,  # 添加language参数，默认值为None
                  distill=0.0,  # 添加distill参数，默认值为0.0
-                 ):
+                 distill_temperature=1.0,  # 添加温度参数，默认值为1.0
+                 grad_clip_norm=1.0,  # 添加梯度裁剪参数，默认值为1.0
+                ):
         self.device = torch.device(device)
         self.fp16 = fp16
         config = yaml.safe_load(open(config_path))
@@ -88,6 +90,8 @@ class Trainer:
         self.resume_lr = resume_lr  # resume_lr参数
         self.best_train_loss = float('inf')  # 用于学习率调度的最佳训练损失
         self.distill_weight = distill  # 保存蒸馏权重
+        self.distill_temperature = distill_temperature  # 保存蒸馏温度参数
+        self.grad_clip_norm = grad_clip_norm  # 保存梯度裁剪参数
         self.use_distill = distill > 0.0  # 根据权重值判断是否使用蒸馏
         # 注意：不要在这里初始化 switched_to_val_scheduler，因为它会在检查点恢复时被设置
         # 但是在 fresh training 的情况下需要初始化
@@ -133,7 +137,6 @@ class Trainer:
             "warmup_steps": 0,
             "base_lr": self.initial_lr,
         }
-
         self.model_params = recursive_munch(config['model_params'])
         self.model = build_model(self.model_params, stage='DiT')
 
@@ -439,7 +442,26 @@ class Trainer:
                 if config.get('pretrained_model', ''):
                     default_model_path = load_custom_model_from_hf("Plachta/Seed-VC", config['pretrained_model'], None)
                     self.set_teacher_model(default_model_path)
-
+    
+    def compute_kl_distill_loss(self, student_logits, teacher_logits, temperature=1.0):
+        """使用KL散度计算蒸馏损失，支持温度参数"""
+        # 避免数值不稳定，添加小的epsilon
+        epsilon = 1e-7
+        
+        # 软化分布
+        student_probs = F.softmax(student_logits / temperature, dim=-1)
+        teacher_probs = F.softmax(teacher_logits / temperature, dim=-1)
+        
+        # 添加epsilon防止log(0)
+        student_probs = torch.clamp(student_probs, epsilon, 1.0 - epsilon)
+        teacher_probs = torch.clamp(teacher_probs, epsilon, 1.0 - epsilon)
+        
+        # 计算KL散度
+        kl_loss = F.kl_div(torch.log(student_probs), teacher_probs, reduction='batchmean')
+        
+        # 温度系数缩放
+        return kl_loss * (temperature ** 2)
+        
     def _init_lr_scheduler(self):
         """初始化学习率调度器"""
         # 为每个优化器创建预热和余弦退火调度器
@@ -902,13 +924,15 @@ class Trainer:
                 teacher_output = teacher_output.to(student_output.dtype)
             # 确保两个张量形状匹配
             if student_output.size() == teacher_output.size():
-                distill_loss = F.mse_loss(student_output, teacher_output.detach())
+                # 使用KL散度计算蒸馏损失，添加温度参数支持
+                distill_loss = self.compute_kl_distill_loss(student_output, teacher_output.detach(), temperature=self.distill_temperature)
             else:
                 # 如果形状不匹配，尝试调整形状
                 min_size = min(student_output.size(0), teacher_output.size(0))
                 student_output_adj = student_output[:min_size] if student_output.size(0) > min_size else student_output
                 teacher_output_adj = teacher_output[:min_size] if teacher_output.size(0) > min_size else teacher_output
-                distill_loss = F.mse_loss(student_output_adj, teacher_output_adj.detach())
+                # 使用KL散度计算蒸馏损失，添加温度参数支持
+                distill_loss = self.compute_kl_distill_loss(student_output_adj, teacher_output_adj.detach(), temperature=self.distill_temperature)
         
         # 计算各损失组件
         commitment_loss_component = (alt_commitment_loss + ori_commitment_loss) * 0.05
@@ -943,8 +967,14 @@ class Trainer:
 
         self.optimizer.zero_grad()
         loss_total.backward()
-        torch.nn.utils.clip_grad_norm_(self.model.cfm.parameters(), 10.0)
-        torch.nn.utils.clip_grad_norm_(self.model.length_regulator.parameters(), 10.0)
+        
+        # 自适应梯度裁剪 - 根据损失值动态调整裁剪阈值
+        # 基础阈值为self.grad_clip_norm，但当损失较大时会降低阈值
+        base_clip_norm = self.grad_clip_norm
+        adaptive_clip_norm = max(0.1, min(base_clip_norm, 10.0 / (loss_total.item() + 1e-8)))
+        torch.nn.utils.clip_grad_norm_(self.model.cfm.parameters(), adaptive_clip_norm)
+        torch.nn.utils.clip_grad_norm_(self.model.length_regulator.parameters(), adaptive_clip_norm)
+        
         self.optimizer.step('cfm')
         self.optimizer.step('length_regulator')
         
@@ -1462,6 +1492,8 @@ def main(args):
         language=args.language,
         teacher_model_path=args.pretrained_ckpt,  # 传递教师模型路径
         distill=args.distill,  # 添加distill参数
+        grad_clip_norm=args.grad_clip_norm,  # 添加梯度裁剪参数
+        distill_temperature=args.distill_temperature,  # 添加蒸馏温度参数
     )
     trainer.train()
     
@@ -1502,10 +1534,13 @@ if __name__ == '__main__':
     parser.add_argument('--initial-lr', type=float, default=1e-5, help='Initial learning rate')
     parser.add_argument('--warmup-steps', type=int, default=1000, help='Number of warmup steps')
     parser.add_argument('--resume-lr', type=float, default=0.0, help='Resume learning rate for resuming training from checkpoint')
+    parser.add_argument('--distill-temperature', type=float, default=1.0,
+                       help='Temperature parameter for knowledge distillation')
+    parser.add_argument('--grad-clip-norm', type=float, default=1.0,
+                       help='Gradient clipping norm value')
 
     parser.add_argument("--gpu", type=int, help="Which GPU id to use", default=0)
     
-
     parser.add_argument('--distill', type=float, default=0.0,
                        help='Enable knowledge distillation with specified weight (0.0 means no distillation)')
     parser.add_argument('--language', type=str, default=None,

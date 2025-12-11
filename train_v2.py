@@ -55,6 +55,8 @@ class Trainer:
             # 添加新的知识蒸馏参数
             distill_ar=0.0,
             distill_cfm=0.0,
+            grad_clip_norm=1.0,
+            distill_temperature=1.0,
             resume_lr=0.0,  # 添加resume_lr参数，默认值为0.0
             language=None,  # 添加language参数，默认值为None
         ):
@@ -66,6 +68,10 @@ class Trainer:
         self.distill_cfm_weight = distill_cfm
         self.use_distill_ar = distill_ar > 0.0
         self.use_distill_cfm = distill_cfm > 0.0
+        # 保存梯度裁剪参数
+        self.grad_clip_norm = grad_clip_norm
+        # 保存蒸馏温度参数
+        self.distill_temperature = distill_temperature
         # 保存预训练检查点路径（同时用于预训练和蒸馏）
         self.pretrained_ar_ckpt_path = pretrained_ar_ckpt_path
         self.pretrained_cfm_ckpt_path = pretrained_cfm_ckpt_path
@@ -165,6 +171,25 @@ class Trainer:
         self.save_interval = save_interval
         self.max_epochs = max_epochs
         self.training_completed = False  # 训练完成标志位
+        
+    def compute_kl_distill_loss(self, student_logits, teacher_logits, temperature=1.0):
+        """使用KL散度计算蒸馏损失，支持温度参数"""
+        # 避免数值不稳定，添加小的epsilon
+        epsilon = 1e-7
+        
+        # 软化分布
+        student_probs = F.softmax(student_logits / temperature, dim=-1)
+        teacher_probs = F.softmax(teacher_logits / temperature, dim=-1)
+        
+        # 添加epsilon防止log(0)
+        student_probs = torch.clamp(student_probs, epsilon, 1.0 - epsilon)
+        teacher_probs = torch.clamp(teacher_probs, epsilon, 1.0 - epsilon)
+        
+        # 计算KL散度
+        kl_loss = F.kl_div(torch.log(student_probs), teacher_probs, reduction='batchmean')
+        
+        # 温度系数缩放
+        return kl_loss * (temperature ** 2)
         
         # Initialize models and optimizers
         self._init_models(train_cfm=train_cfm, train_ar=train_ar)
@@ -872,7 +897,9 @@ class Trainer:
                                 if loss_cfm.dtype != teacher_loss_cfm.dtype:
                                     print(f"警告: CFM蒸馏损失数据类型不一致 - student: {loss_cfm.dtype}, teacher: {teacher_loss_cfm.dtype}")
                                     teacher_loss_cfm = teacher_loss_cfm.to(loss_cfm.dtype)
-                                distill_loss += F.mse_loss(loss_cfm, teacher_loss_cfm.detach()) * self.distill_cfm_weight  # 使用参数指定的权重
+                                # 使用KL散度计算蒸馏损失，添加温度参数支持
+                                kl_loss = self.compute_kl_distill_loss(loss_cfm, teacher_loss_cfm.detach(), temperature=self.distill_temperature)
+                                distill_loss += kl_loss * self.distill_cfm_weight  # 使用参数指定的权重
                             else:
                                 print(f"Warning: Shape mismatch in CFM distillation loss - student: {loss_cfm.size()}, teacher: {teacher_loss_cfm.size()}")
                         else:
@@ -886,7 +913,9 @@ class Trainer:
                                 if loss_ar.dtype != teacher_loss_ar.dtype:
                                     print(f"警告: AR蒸馏损失数据类型不一致 - student: {loss_ar.dtype}, teacher: {teacher_loss_ar.dtype}")
                                     teacher_loss_ar = teacher_loss_ar.to(loss_ar.dtype)
-                                distill_loss += F.mse_loss(loss_ar, teacher_loss_ar.detach()) * self.distill_ar_weight  # 使用参数指定的权重
+                                # 使用KL散度计算蒸馏损失，添加温度参数支持
+                                kl_loss = self.compute_kl_distill_loss(loss_ar, teacher_loss_ar.detach(), temperature=self.distill_temperature)
+                                distill_loss += kl_loss * self.distill_ar_weight  # 使用参数指定的权重
                             else:
                                 print(f"Warning: Shape mismatch in AR distillation loss - student: {loss_ar.size()}, teacher: {teacher_loss_ar.size()}")
                         else:
@@ -903,8 +932,12 @@ class Trainer:
                 )
                 self.accelerator.backward(loss_total)
 
+                # 自适应梯度裁剪 - 根据损失值动态调整裁剪阈值
+                # 基础阈值为self.grad_clip_norm，但当损失较大时会降低阈值
+                base_clip_norm = self.grad_clip_norm
+                adaptive_clip_norm = max(0.1, min(base_clip_norm, 10.0 / (loss_total.item() + 1e-8)))
                 grad_norm_g = torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(), 1000.0
+                    self.model.parameters(), adaptive_clip_norm
                 )
                 self.optimizer.step()
         except RuntimeError as e:
@@ -1159,6 +1192,8 @@ def main(args):
         # 传递新的知识蒸馏参数
         distill_ar=args.distill_ar,
         distill_cfm=args.distill_cfm,
+        grad_clip_norm=args.grad_clip_norm,
+        distill_temperature=args.distill_temperature,
     )
     # 添加fp16错误处理
     try:
@@ -1208,6 +1243,10 @@ if __name__ == '__main__':
     # 知识蒸馏参数
     parser.add_argument('--distill-ar', type=float, default=0.0, help='Enable knowledge distillation for AR model with specified weight (0.0 means no distillation)')
     parser.add_argument('--distill-cfm', type=float, default=0.0, help='Enable knowledge distillation for CFM model with specified weight (0.0 means no distillation)')
+    parser.add_argument('--grad-clip-norm', type=float, default=1.0,
+                       help='Gradient clipping norm value')
+    parser.add_argument('--distill-temperature', type=float, default=1.0,
+                       help='Temperature parameter for knowledge distillation')
     
     # 语言参数
     parser.add_argument('--language', type=str, default=None, help='Language for Whisper model')
