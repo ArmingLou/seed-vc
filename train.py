@@ -817,6 +817,17 @@ class Trainer:
                 target_commitment_loss = target_total_loss * target_commitment_ratio / sum_ratios if sum_ratios > 0 else 0
                 target_codebook_loss = target_total_loss * target_codebook_ratio / sum_ratios if sum_ratios > 0 else 0
                 target_distill_loss = target_total_loss * target_distill_ratio / sum_ratios if sum_ratios > 0 else 0
+                
+                # 调整为永远以 main 的因子为 1.0
+                mainScale = target_main_loss / original_main_loss if original_main_loss > 0 else 1.0
+                target_main_loss = original_main_loss
+                target_commitment_loss = target_commitment_loss / mainScale
+                target_codebook_loss = target_codebook_loss / mainScale
+                target_distill_loss = target_distill_loss / mainScale
+                target_total_loss = target_main_loss + \
+                                    target_commitment_loss + \
+                                    target_codebook_loss + \
+                                    target_distill_loss
                     
                 print(f"目标损失值:")
                 print(f"  主CFM损失: {target_main_loss:.6f}")
@@ -827,7 +838,7 @@ class Trainer:
                     
                 # 计算缩放因子
                 self.loss_scaling_factors = {}
-                self.loss_scaling_factors['main'] = target_main_loss / original_main_loss if original_main_loss > 0 else 0.0
+                self.loss_scaling_factors['main'] = 1.0
                 self.loss_scaling_factors['commitment'] = target_commitment_loss / original_commitment_loss if original_commitment_loss > 0 else 0.0
                 self.loss_scaling_factors['codebook'] = target_codebook_loss / original_codebook_loss if original_codebook_loss > 0 else 0.0
                 self.loss_scaling_factors['distill'] = target_distill_loss / original_distill_loss_val if original_distill_loss_val > 0 else 0.0
@@ -839,7 +850,7 @@ class Trainer:
                 print(f"  蒸馏损失缩放因子: {self.loss_scaling_factors['distill']:.6f}")
                 
                 # 初始化ema_loss为总原始损失值
-                self.ema_loss = original_total_loss                    
+                self.ema_loss = target_total_loss                    
         except Exception as e:
             print(f"计算初始损失缩放因子时出错: {e}")
             # 使用默认缩放因子
