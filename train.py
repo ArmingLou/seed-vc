@@ -799,10 +799,10 @@ class Trainer:
             self.model.length_regulator(S_ori, ylens=target_lengths, f0=F0_ori)
         )
         if alt_commitment_loss is None:
-            alt_commitment_loss = 0
-            alt_codebook_loss = 0
-            ori_commitment_loss = 0
-            ori_codebook_loss = 0
+            alt_commitment_loss = torch.tensor(0.0, device=self.device)
+            alt_codebook_loss = torch.tensor(0.0, device=self.device)
+            ori_commitment_loss = torch.tensor(0.0, device=self.device)
+            ori_codebook_loss = torch.tensor(0.0, device=self.device)
 
         # deterministically set a length as prompt
         # Generate deterministic random-like values based on current iteration
@@ -857,7 +857,7 @@ class Trainer:
         loss, _ = self.model.cfm(x, target_lengths, prompt_len, cond, y)
 
         # 如果有教师模型，添加知识蒸馏损失
-        distill_loss = 0
+        distill_loss = torch.tensor(0.0, device=self.device)
         if self.teacher_model is not None and self.use_distill:
             with torch.no_grad():
                 # 使用教师模型生成目标输出
