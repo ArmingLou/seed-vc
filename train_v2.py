@@ -335,18 +335,18 @@ class Trainer:
                 
                 # 计算目标损失值（保持总损失不变）
                 target_total_loss = original_total_loss
-                target_ar_loss = target_total_loss * target_ar_ratio / (
-                    target_ar_ratio + target_cfm_ratio + target_distill_ar_ratio + target_distill_cfm_ratio
-                ) if (target_ar_ratio + target_cfm_ratio + target_distill_ar_ratio + target_distill_cfm_ratio) > 0 else 0
-                target_cfm_loss = target_total_loss * target_cfm_ratio / (
-                    target_ar_ratio + target_cfm_ratio + target_distill_ar_ratio + target_distill_cfm_ratio
-                ) if (target_ar_ratio + target_cfm_ratio + target_distill_ar_ratio + target_distill_cfm_ratio) > 0 else 0
-                target_distill_ar_loss = target_total_loss * target_distill_ar_ratio / (
-                    target_ar_ratio + target_cfm_ratio + target_distill_ar_ratio + target_distill_cfm_ratio
-                ) if (target_ar_ratio + target_cfm_ratio + target_distill_ar_ratio + target_distill_cfm_ratio) > 0 else 0
-                target_distill_cfm_loss = target_total_loss * target_distill_cfm_ratio / (
-                    target_ar_ratio + target_cfm_ratio + target_distill_ar_ratio + target_distill_cfm_ratio
-                ) if (target_ar_ratio + target_cfm_ratio + target_distill_ar_ratio + target_distill_cfm_ratio) > 0 else 0
+                # AR模型和CFM模型分别独立计算目标比例
+                # AR模型组：target_ar_ratio 和 target_distill_ar_ratio
+                ar_group_ratio_sum = sum([ratio for ratio in [target_ar_ratio, target_distill_ar_ratio] if ratio > 0])
+                # CFM模型组：target_cfm_ratio 和 target_distill_cfm_ratio
+                cfm_group_ratio_sum = sum([ratio for ratio in [target_cfm_ratio, target_distill_cfm_ratio] if ratio > 0])
+                
+                # 根据各自组内的比例分配目标损失值
+                target_ar_loss = target_total_loss * target_ar_ratio / ar_group_ratio_sum if ar_group_ratio_sum > 0 and target_ar_ratio > 0 else 0
+                target_distill_ar_loss = target_total_loss * target_distill_ar_ratio / ar_group_ratio_sum if ar_group_ratio_sum > 0 and target_distill_ar_ratio > 0 else 0
+                
+                target_cfm_loss = target_total_loss * target_cfm_ratio / cfm_group_ratio_sum if cfm_group_ratio_sum > 0 and target_cfm_ratio > 0 else 0
+                target_distill_cfm_loss = target_total_loss * target_distill_cfm_ratio / cfm_group_ratio_sum if cfm_group_ratio_sum > 0 and target_distill_cfm_ratio > 0 else 0
                 
                 if self.accelerator.is_main_process:
                     print(f"目标损失值:")
