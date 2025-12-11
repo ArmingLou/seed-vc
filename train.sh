@@ -113,10 +113,10 @@ TRAIN_AR=false
 FP16=false  # 是否使用FP16，默认false
 PATIENCE=25 # 建议至少覆盖一个epoch。
 VALIDATION_INTERVAL=10 # 建议约验证样本数/batch_size 。validation_interval × patience × batch_size >= 训练样本数 。validation_interval × batch_size = 验证样本数
-DISTILL=false
+DISTILL=0.0
 # V2版本的蒸馏参数
-DISTILL_AR=false
-DISTILL_CFM=false
+DISTILL_AR=0.0
+DISTILL_CFM=0.0
 MIN_LR=1e-7
 LR_ADJUST_INTERVAL=10
 INITIAL_LR=1e-5 # batch×2 → lr÷4 目前粤语如果batch size 8 。声调敏感学习率更低用1e-5
@@ -218,19 +218,19 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --distill)
-            DISTILL=true
-            echo "启用知识蒸馏"
-            shift
+            DISTILL="$2"
+            echo "设置知识蒸馏权重: $DISTILL"
+            shift 2
             ;;        
         --distill-ar)
-            DISTILL_AR=true
-            echo "启用 AR 模型知识蒸馏"
-            shift
+            DISTILL_AR="$2"
+            echo "设置 AR 模型知识蒸馏权重: $DISTILL_AR"
+            shift 2
             ;;
         --distill-cfm)
-            DISTILL_CFM=true
-            echo "启用 CFM 模型知识蒸馏"
-            shift
+            DISTILL_CFM="$2"
+            echo "设置 CFM 模型知识蒸馏权重: $DISTILL_CFM"
+            shift 2
             ;;
         --min-lr)
             MIN_LR="$2"
@@ -305,9 +305,9 @@ while [[ $# -gt 0 ]]; do
             echo "  --train-cfm     训练 CFM 模型 (仅 V2)"
             echo "  --train-ar      训练 AR 模型 (仅 V2)"
             echo "  --fp16          使用 FP16 精度 (默认: false)"
-            echo "  --distill       启用知识蒸馏 (V1版本)"
-            echo "  --distill-ar    启用 AR 模型知识蒸馏 (V2版本)"
-            echo "  --distill-cfm   启用 CFM 模型知识蒸馏 (V2版本)"
+            echo "  --distill       设置知识蒸馏权重 (V1版本，默认: 0.0)"
+            echo "  --distill-ar    设置 AR 模型知识蒸馏权重 (V2版本，默认: 0.0)"
+            echo "  --distill-cfm   设置 CFM 模型知识蒸馏权重 (V2版本，默认: 0.0)"
             
             echo "  --min-lr        设置最小学习率 (默认: 1e-7)"
             echo "  --lr-adjust-interval 设置学习率调整间隔 (默认: 10)"
@@ -472,35 +472,35 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     
     # 询问是否启用知识蒸馏（根据版本不同询问不同的参数）
     if [[ "$VERSION" = "v1" ]]; then
-        read -p "是否启用知识蒸馏？(y/N): " -n 1 -r
+        read -p "请输入知识蒸馏权重 (默认: 0.0): " distill_weight
         echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            DISTILL=true
-            echo "已启用知识蒸馏"
+        if [[ -n "$distill_weight" ]]; then
+            DISTILL="$distill_weight"
+            echo "设置知识蒸馏权重: $DISTILL"
         else
-            DISTILL=false
-            echo "已禁用知识蒸馏"
+            DISTILL=0.0
+            echo "禁用知识蒸馏"
         fi
     else
         echo "是否启用知识蒸馏？(V2版本支持独立控制AR和CFM模型的蒸馏)"
-        read -p "是否启用 AR 模型知识蒸馏？(y/N): " -n 1 -r
+        read -p "请输入 AR 模型知识蒸馏权重 (默认: 0.0): " distill_ar_weight
         echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            DISTILL_AR=true
-            echo "已启用 AR 模型知识蒸馏"
+        if [[ -n "$distill_ar_weight" ]]; then
+            DISTILL_AR="$distill_ar_weight"
+            echo "设置 AR 模型知识蒸馏权重: $DISTILL_AR"
         else
-            DISTILL_AR=false
-            echo "已禁用 AR 模型知识蒸馏"
+            DISTILL_AR=0.0
+            echo "禁用 AR 模型知识蒸馏"
         fi
         
-        read -p "是否启用 CFM 模型知识蒸馏？(y/N): " -n 1 -r
+        read -p "请输入 CFM 模型知识蒸馏权重 (默认: 0.0): " distill_cfm_weight
         echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            DISTILL_CFM=true
-            echo "已启用 CFM 模型知识蒸馏"
+        if [[ -n "$distill_cfm_weight" ]]; then
+            DISTILL_CFM="$distill_cfm_weight"
+            echo "设置 CFM 模型知识蒸馏权重: $DISTILL_CFM"
         else
-            DISTILL_CFM=false
-            echo "已禁用 CFM 模型知识蒸馏"
+            DISTILL_CFM=0.0
+            echo "禁用 CFM 模型知识蒸馏"
         fi
     fi
     
@@ -668,19 +668,19 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     
     # 显示知识蒸馏参数（根据版本不同显示不同的参数）
     if [[ "$VERSION" = "v1" ]]; then
-        if [[ "$DISTILL" = true ]]; then
-            echo "知识蒸馏: 启用"
+        if [[ "$DISTILL" != "0.0" ]]; then
+            echo "知识蒸馏权重: $DISTILL"
         else
             echo "知识蒸馏: 禁用"
         fi
     else
-        if [[ "$DISTILL_AR" = true ]]; then
-            echo "AR 模型知识蒸馏: 启用"
+        if [[ "$DISTILL_AR" != "0.0" ]]; then
+            echo "AR 模型知识蒸馏权重: $DISTILL_AR"
         else
             echo "AR 模型知识蒸馏: 禁用"
         fi
-        if [[ "$DISTILL_CFM" = true ]]; then
-            echo "CFM 模型知识蒸馏: 启用"
+        if [[ "$DISTILL_CFM" != "0.0" ]]; then
+            echo "CFM 模型知识蒸馏权重: $DISTILL_CFM"
         else
             echo "CFM 模型知识蒸馏: 禁用"
         fi
@@ -837,15 +837,15 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     
     # 添加知识蒸馏参数（根据版本不同添加不同的参数）
     if [[ "$VERSION" = "v1" ]]; then
-        if [[ "$DISTILL" = true ]]; then
-            CMD+=" --distill"
+        if [[ "$DISTILL" != "0.0" ]]; then
+            CMD+=" --distill $DISTILL"
         fi
     else
-        if [[ "$DISTILL_AR" = true ]]; then
-            CMD+=" --distill-ar"
+        if [[ "$DISTILL_AR" != "0.0" ]]; then
+            CMD+=" --distill-ar $DISTILL_AR"
         fi
-        if [[ "$DISTILL_CFM" = true ]]; then
-            CMD+=" --distill-cfm"
+        if [[ "$DISTILL_CFM" != "0.0" ]]; then
+            CMD+=" --distill-cfm $DISTILL_CFM"
         fi
     fi
     
@@ -939,8 +939,8 @@ if [ "$VERSION" = "v1" ]; then
     fi
     
     # 添加知识蒸馏参数（V1版本使用--distill）
-    if [[ "$DISTILL" = true ]]; then
-        TRAIN_ARGS+=" --distill"
+    if [[ "$DISTILL" != "0.0" ]]; then
+        TRAIN_ARGS+=" --distill $DISTILL"
     fi
     
     # 添加预训练检查点参数
@@ -1000,11 +1000,11 @@ else
     fi
     
     # 添加知识蒸馏参数（V2版本使用--distill-ar和--distill-cfm）
-    if [[ "$DISTILL_AR" = true ]]; then
-        V2_TRAIN_ARGS+=" --distill-ar"
+    if [[ "$DISTILL_AR" != "0.0" ]]; then
+        V2_TRAIN_ARGS+=" --distill-ar $DISTILL_AR"
     fi
-    if [[ "$DISTILL_CFM" = true ]]; then
-        V2_TRAIN_ARGS+=" --distill-cfm"
+    if [[ "$DISTILL_CFM" != "0.0" ]]; then
+        V2_TRAIN_ARGS+=" --distill-cfm $DISTILL_CFM"
     fi
     
     # 使用统一的训练脚本

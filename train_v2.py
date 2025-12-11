@@ -53,8 +53,8 @@ class Trainer:
             initial_lr=1e-5,
             warmup_steps=1000,
             # 添加新的知识蒸馏参数
-            distill_ar=False,
-            distill_cfm=False,
+            distill_ar=0.0,
+            distill_cfm=0.0,
             resume_lr=0.0,  # 添加resume_lr参数，默认值为0.0
             language=None,  # 添加language参数，默认值为None
         ):
@@ -62,8 +62,10 @@ class Trainer:
         self.mixed_precision = mixed_precision
         self.requested_fp16 = fp16  # 保存用户请求的fp16设置
         # 保存新的知识蒸馏参数
-        self.distill_ar = distill_ar
-        self.distill_cfm = distill_cfm
+        self.distill_ar_weight = distill_ar
+        self.distill_cfm_weight = distill_cfm
+        self.use_distill_ar = distill_ar > 0.0
+        self.use_distill_cfm = distill_cfm > 0.0
         # 保存预训练检查点路径（同时用于预训练和蒸馏）
         self.pretrained_ar_ckpt_path = pretrained_ar_ckpt_path
         self.pretrained_cfm_ckpt_path = pretrained_cfm_ckpt_path
@@ -174,7 +176,7 @@ class Trainer:
         self.teacher_model = None
         # 根据新的参数决定是否加载教师模型
         # 只有在对应模型需要训练且启用了蒸馏时才加载教师模型
-        if (self.distill_ar and self.train_ar) or (self.distill_cfm and self.train_cfm):
+        if (self.use_distill_ar and self.train_ar) or (self.use_distill_cfm and self.train_cfm):
             self.set_teacher_model()
 
     def _init_dataloader(self, data_dir, batch_size, num_workers, spect_params, sr):
@@ -308,7 +310,7 @@ class Trainer:
             if found_checkpoint:
                 # 检查是否为教师模式（基于蒸馏参数和训练参数）
                 # 只有在对应模型需要训练且启用了蒸馏时才算作教师模式
-                if (self.distill_ar and self.train_ar) or (self.distill_cfm and self.train_cfm):
+                if (self.use_distill_ar and self.train_ar) or (self.use_distill_cfm and self.train_cfm):
                     checkpoint_type = "teacher"
                 else:
                     checkpoint_type = "pretrained"
@@ -459,7 +461,7 @@ class Trainer:
         # 如果没有提供路径参数，则根据是否启用蒸馏和训练来决定使用哪个模型
         if teacher_model_ar_path is None:
             # 只有在启用了AR蒸馏且需要训练AR模型时才加载教师模型
-            if self.distill_ar and self.train_ar:
+            if self.use_distill_ar and self.train_ar:
                 if self.pretrained_ar_ckpt_path:
                     # 如果指定了预训练检查点路径，则使用该路径
                     teacher_model_ar_path = self.pretrained_ar_ckpt_path
@@ -471,7 +473,7 @@ class Trainer:
                 
         if teacher_model_cfm_path is None:
             # 只有在启用了CFM蒸馏且需要训练CFM模型时才加载教师模型
-            if self.distill_cfm and self.train_cfm:
+            if self.use_distill_cfm and self.train_cfm:
                 if self.pretrained_cfm_ckpt_path:
                     # 如果指定了预训练检查点路径，则使用该路径
                     teacher_model_cfm_path = self.pretrained_cfm_ckpt_path
@@ -483,15 +485,15 @@ class Trainer:
             
         # 检查是否有教师模型需要加载
         # 只有在对应模型需要训练且启用了蒸馏时才检查教师模型文件
-        has_ar_teacher = (teacher_model_ar_path and os.path.exists(teacher_model_ar_path)) if (self.train_ar and self.distill_ar) else False
-        has_cfm_teacher = (teacher_model_cfm_path and os.path.exists(teacher_model_cfm_path)) if (self.train_cfm and self.distill_cfm) else False
+        has_ar_teacher = (teacher_model_ar_path and os.path.exists(teacher_model_ar_path)) if (self.train_ar and self.use_distill_ar) else False
+        has_cfm_teacher = (teacher_model_cfm_path and os.path.exists(teacher_model_cfm_path)) if (self.train_cfm and self.use_distill_cfm) else False
         
         # 只有在需要加载教师模型时才继续
-        if (self.train_ar and self.distill_ar and has_ar_teacher) or (self.train_cfm and self.distill_cfm and has_cfm_teacher):
+        if (self.train_ar and self.use_distill_ar and has_ar_teacher) or (self.train_cfm and self.use_distill_cfm and has_cfm_teacher):
             print(f"正在加载教师模型:")
-            if self.train_ar and self.distill_ar and has_ar_teacher:
+            if self.train_ar and self.use_distill_ar and has_ar_teacher:
                 print(f"  AR教师模型: {teacher_model_ar_path}")
-            if self.train_cfm and self.distill_cfm and has_cfm_teacher:
+            if self.train_cfm and self.use_distill_cfm and has_cfm_teacher:
                 print(f"  CFM教师模型: {teacher_model_cfm_path}")
                 
             # 加载教师模型（不更新其参数）
@@ -502,8 +504,8 @@ class Trainer:
                     p.requires_grad = False
                 
                 # 根据训练参数和蒸馏参数决定加载哪些教师模型部分
-                ar_checkpoint_path = teacher_model_ar_path if self.train_ar and self.distill_ar and has_ar_teacher else None
-                cfm_checkpoint_path = teacher_model_cfm_path if self.train_cfm and self.distill_cfm and has_cfm_teacher else None
+                ar_checkpoint_path = teacher_model_ar_path if self.train_ar and self.use_distill_ar and has_ar_teacher else None
+                cfm_checkpoint_path = teacher_model_cfm_path if self.train_cfm and self.use_distill_cfm and has_cfm_teacher else None
                 
                 print(f"加载教师模型检查点:")
                 if ar_checkpoint_path:
@@ -515,8 +517,8 @@ class Trainer:
                 self.teacher_model.load_checkpoints(
                     cfm_checkpoint_path=cfm_checkpoint_path,
                     ar_checkpoint_path=ar_checkpoint_path,
-                    train_cfm=bool(cfm_checkpoint_path) and self.train_cfm and self.distill_cfm,
-                    train_ar=bool(ar_checkpoint_path) and self.train_ar and self.distill_ar
+                    train_cfm=bool(cfm_checkpoint_path) and self.train_cfm and self.use_distill_cfm,
+                    train_ar=bool(ar_checkpoint_path) and self.train_ar and self.use_distill_ar
                 )
                 
                 # 准备教师模型用于分布式训练
@@ -550,7 +552,8 @@ class Trainer:
 
                 loss = loss_ar + loss_cfm
                 
-                return loss.detach().item()
+                # 验证时不包含蒸馏损失，但返回各组件用于详细打印
+                return loss.detach().item(), loss_ar.detach().item(), loss_cfm.detach().item()
     
     def validate(self):
         """在整个验证集上评估模型"""
@@ -559,19 +562,45 @@ class Trainer:
             
         self.model.eval()
         total_loss = 0
+        total_ar_loss = 0
+        total_cfm_loss = 0
         num_batches = 0
         
         with torch.no_grad():
             for batch in self.val_dataloader:
                 batch = [b.to(self.device) for b in batch]
-                loss = self.validate_one_step(batch)
+                loss_result = self.validate_one_step(batch)
+                if isinstance(loss_result, tuple) and len(loss_result) == 3:
+                    loss, ar_loss, cfm_loss = loss_result
+                else:
+                    # 兼容旧版本返回值
+                    loss = loss_result
+                    ar_loss = cfm_loss = 0
+                
                 total_loss += loss
+                total_ar_loss += ar_loss
+                total_cfm_loss += cfm_loss
                 num_batches += 1
         
         self.model.train()
         
         if num_batches > 0:
             avg_loss = total_loss / num_batches
+            avg_ar_loss = total_ar_loss / num_batches
+            avg_cfm_loss = total_cfm_loss / num_batches
+            
+            # 打印详细的验证损失组件信息
+            if self.accelerator.is_main_process:
+                print(f"\nDetailed Validation Loss Components:")
+                print(f"  Average AR Loss: {avg_ar_loss:.6f}")
+                print(f"  Average CFM Loss: {avg_cfm_loss:.6f}")
+                print(f"  Average Total Loss: {avg_loss:.6f}")
+                # 打印各组件占总损失的比例
+                if avg_loss > 0:
+                    print(f"  Loss Composition:")
+                    print(f"    AR: {avg_ar_loss/avg_loss*100:.1f}%")
+                    print(f"    CFM: {avg_cfm_loss/avg_loss*100:.1f}%")
+            
             return avg_loss
         else:
             return None
@@ -768,8 +797,8 @@ class Trainer:
                     with torch.no_grad():
                         # 使用教师模型生成目标输出
                         # 只计算需要蒸馏的模型部分的输出，提高效率
-                        teacher_forward_ar = self.train_ar and self.distill_ar
-                        teacher_forward_cfm = self.train_cfm and self.distill_cfm
+                        teacher_forward_ar = self.train_ar and self.use_distill_ar
+                        teacher_forward_cfm = self.train_cfm and self.use_distill_cfm
                         
                         teacher_loss_ar, teacher_loss_cfm = self.teacher_model(
                             waves_16k.to(self.device),
@@ -782,12 +811,12 @@ class Trainer:
                     
                     # 计算学生模型和教师模型输出之间的蒸馏损失
                     # 只有在对应模型被训练且启用了蒸馏时才计算蒸馏损失
-                    if self.train_cfm and self.distill_cfm:
+                    if self.train_cfm and self.use_distill_cfm:
                         # CFM蒸馏损失
-                        distill_loss += F.mse_loss(loss_cfm, teacher_loss_cfm.detach()) * 0.5  # 知识蒸馏损失权重
-                    if self.train_ar and self.distill_ar:
+                        distill_loss += F.mse_loss(loss_cfm, teacher_loss_cfm.detach()) * self.distill_cfm_weight  # 使用参数指定的权重
+                    if self.train_ar and self.use_distill_ar:
                         # AR蒸馏损失
-                        distill_loss += F.mse_loss(loss_ar, teacher_loss_ar.detach()) * 0.3  # AR知识蒸馏损失权重
+                        distill_loss += F.mse_loss(loss_ar, teacher_loss_ar.detach()) * self.distill_ar_weight  # 使用参数指定的权重
                 loss_total = loss + distill_loss
                 self.ema_loss = loss_total.item()
 
@@ -850,13 +879,11 @@ class Trainer:
                     print(f"Learning rate manually adjusted from {current_lr:.2e} to 《{new_lr:.2e}》 based on validation loss plateau")
 
         # Log training progress
-        self._log_training_progress(epoch, i, loss_total, loss_ar, loss_cfm, grad_norm_g)
+        self._log_training_progress(epoch, i, loss_total, loss_ar, loss_cfm, grad_norm_g, distill_loss)
 
         # Save checkpoint
         if self.iters % self.save_interval == 0 and self.accelerator.is_main_process:
             self._save_checkpoint(epoch)
-
-        
 
     def _fallback_to_fp32(self):
         """Fallback from fp16 to fp32 training"""
@@ -871,7 +898,7 @@ class Trainer:
         # 我们需要告诉accelerator后续操作不再使用autocast
         print("Switched to fp32 training mode. Continuing training...")
 
-    def _log_training_progress(self, epoch, i, loss, loss_ar, loss_cfm, grad_norm_g):
+    def _log_training_progress(self, epoch, i, loss, loss_ar, loss_cfm, grad_norm_g, distill_loss=0):
         """Log training progress to tensorboard and wandb"""
         if self.iters % self.log_interval == 0 and self.accelerator.is_main_process:
             with torch.no_grad():
@@ -883,9 +910,27 @@ class Trainer:
                     # 余弦退火阶段使用余弦调度器的学习率
                     cur_lr = self.cosine_scheduler.get_last_lr()[0] if i != 0 else 0
 
+                # 打印详细的损失组件信息
+                print(f"\nDetailed Loss Components at epoch {epoch}, step {self.iters}:")
+                print(f"  AR Loss: {loss_ar.item():.6f}")
+                print(f"  CFM Loss: {loss_cfm.item():.6f}")
+                print(f"  Total Main Loss: {loss.item():.6f}")
+                if self.teacher_model is not None and (self.use_distill_ar or self.use_distill_cfm):
+                    print(f"  Distill Loss: {distill_loss:.6f}")
+                # 计算总训练损失（包含蒸馏损失）
+                total_training_loss = loss.item() + (distill_loss if self.teacher_model is not None else 0)
+                print(f"  Total Training Loss: {total_training_loss:.6f}")
+                # 同时打印各组件占总损失的比例
+                if total_training_loss > 0:
+                    print(f"  Loss Composition:")
+                    print(f"    AR: {loss_ar.item()/total_training_loss*100:.1f}%")
+                    print(f"    CFM: {loss_cfm.item()/total_training_loss*100:.1f}%")
+                    if self.teacher_model is not None and (self.use_distill_ar or self.use_distill_cfm):
+                        print(f"    Distill: {distill_loss/total_training_loss*100:.1f}%")
+
                 # Log to console
                 print("Epoch %d, Step %d, Iteration %d, Loss: 「%.4f」, Loss AR: %.4f, Loss CFM: %.4f, Grad Norm: %.4f, LR: %.6f"
-                      % (epoch, self.iters, i, loss.item(), loss_ar.item(), loss_cfm.item(), grad_norm_g, cur_lr))
+                      % (epoch, self.iters, i, total_training_loss, loss_ar.item(), loss_cfm.item(), grad_norm_g, cur_lr))
                 
                 # 如果有验证集，也打印验证相关信息
                 if self.val_dataloader:
@@ -1081,8 +1126,8 @@ if __name__ == '__main__':
     parser.add_argument('--resume-lr', type=float, default=0.0, help='Resume learning rate for resuming training from checkpoint')
     
     # 知识蒸馏参数
-    parser.add_argument('--distill-ar', action='store_true', help='Enable knowledge distillation for AR model')
-    parser.add_argument('--distill-cfm', action='store_true', help='Enable knowledge distillation for CFM model')
+    parser.add_argument('--distill-ar', type=float, default=0.0, help='Enable knowledge distillation for AR model with specified weight (0.0 means no distillation)')
+    parser.add_argument('--distill-cfm', type=float, default=0.0, help='Enable knowledge distillation for CFM model with specified weight (0.0 means no distillation)')
     
     # 语言参数
     parser.add_argument('--language', type=str, default=None, help='Language for Whisper model')

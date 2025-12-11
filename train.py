@@ -47,7 +47,7 @@ class Trainer:
                  teacher_model_path=None,  # 添加教师模型路径参数
                  resume_lr=0.0,  # 添加resume_lr参数，默认值为0.0
                  language=None,  # 添加language参数，默认值为None
-                 distill=False,  # 添加distill参数，默认值为False
+                 distill=0.0,  # 添加distill参数，默认值为0.0
                  ):
         self.device = torch.device(device)
         self.fp16 = fp16
@@ -87,7 +87,8 @@ class Trainer:
         self.warmup_steps = warmup_steps  # 学习率预热步数
         self.resume_lr = resume_lr  # resume_lr参数
         self.best_train_loss = float('inf')  # 用于学习率调度的最佳训练损失
-        self.distill = distill  # 添加distill参数
+        self.distill_weight = distill  # 保存蒸馏权重
+        self.use_distill = distill > 0.0  # 根据权重值判断是否使用蒸馏
         # 注意：不要在这里初始化 switched_to_val_scheduler，因为它会在检查点恢复时被设置
         # 但是在 fresh training 的情况下需要初始化
         # 使用 hasattr 检查是否已经设置过，避免覆盖检查点中恢复的值
@@ -429,7 +430,7 @@ class Trainer:
         self.teacher_model = None
         
         # 如果启用了蒸馏，设置教师模型用于知识蒸馏
-        if self.distill:
+        if self.use_distill:
             # 如果没有指定教师模型路径，则使用默认模型作为教师模型
             if teacher_model_path:
                 self.set_teacher_model(teacher_model_path)
@@ -857,19 +858,43 @@ class Trainer:
 
         # 如果有教师模型，添加知识蒸馏损失
         distill_loss = 0
-        if self.teacher_model is not None:
+        if self.teacher_model is not None and self.use_distill:
             with torch.no_grad():
                 # 使用教师模型生成目标输出
                 teacher_loss, teacher_output = self.teacher_model.cfm(x, target_lengths, prompt_len, cond, y)
             # 计算学生模型和教师模型输出之间的蒸馏损失
             distill_loss = F.mse_loss(_, teacher_output.detach())
-
+        
+        # 计算各损失组件
+        commitment_loss_component = (alt_commitment_loss + ori_commitment_loss) * 0.05
+        codebook_loss_component = (ori_codebook_loss + alt_codebook_loss) * 0.15
+        distill_loss_component = distill_loss * self.distill_weight  # 使用参数指定的权重
+        
         loss_total = (
             loss +
-            (alt_commitment_loss + ori_commitment_loss) * 0.05 +
-            (ori_codebook_loss + alt_codebook_loss) * 0.15 +
-            distill_loss * 0.5  # 知识蒸馏损失权重
+            commitment_loss_component +
+            codebook_loss_component +
+            distill_loss_component
         )
+        
+        # 打印详细的损失组件信息（每log_interval步打印一次）
+        if self.iters % self.log_interval == 0:
+            print(f"\nDetailed Loss Components at epoch {self.epoch}, step {self.iters}:")
+            print(f"  Main CFM Loss: {loss.item():.6f}")
+            print(f"  Commitment Loss: {commitment_loss_component.item():.6f} (alt: {alt_commitment_loss.item():.6f}, ori: {ori_commitment_loss.item():.6f})")
+            print(f"  Codebook Loss: {codebook_loss_component.item():.6f} (alt: {alt_codebook_loss.item():.6f}, ori: {ori_codebook_loss.item():.6f})")
+            if self.teacher_model is not None and self.use_distill:
+                print(f"  Distill Loss: {distill_loss_component.item():.6f} (raw: {distill_loss.item():.6f})")
+            print(f"  Total Training Loss: {loss_total.item():.6f}")
+            # 同时打印各组件占总损失的比例
+            total_components = loss_total.item()
+            if total_components > 0:
+                print(f"  Loss Composition:")
+                print(f"    Main CFM: {loss.item()/total_components*100:.1f}%")
+                print(f"    Commitment: {commitment_loss_component.item()/total_components*100:.1f}%")
+                print(f"    Codebook: {codebook_loss_component.item()/total_components*100:.1f}%")
+                if self.teacher_model is not None and self.use_distill:
+                    print(f"    Distill: {distill_loss_component.item()/total_components*100:.1f}%")
 
         self.optimizer.zero_grad()
         loss_total.backward()
@@ -881,7 +906,7 @@ class Trainer:
         # 使用新的学习率调整机制
         self._adjust_learning_rate(loss_total.item())
 
-        return loss.detach().item()
+        return loss_total.detach().item()
 
     def validate_one_step(self, batch):
         """在验证集上评估一个批次"""
@@ -1008,13 +1033,20 @@ class Trainer:
             
             loss, _ = self.model.cfm(x, target_lengths, prompt_len, cond, y)
             
+            # 计算各损失组件（验证时不包含蒸馏损失）
+            commitment_loss_component = (alt_commitment_loss + ori_commitment_loss) * 0.05
+            codebook_loss_component = (ori_codebook_loss + alt_codebook_loss) * 0.15
+            
             loss_total = (
                 loss +
-                (alt_commitment_loss + ori_commitment_loss) * 0.05 +
-                (ori_codebook_loss + alt_codebook_loss) * 0.15
+                commitment_loss_component +
+                codebook_loss_component
             )
             
-            return loss_total.detach().item()
+            # 打印详细的验证损失组件信息（仅在需要时打印，比如在validate函数中）
+            # 这里我们只计算返回值，详细打印在validate函数中处理
+            
+            return loss_total.detach().item(), loss.detach().item(), commitment_loss_component.detach().item(), codebook_loss_component.detach().item()
     
     def validate(self):
         """在整个验证集上评估模型"""
@@ -1023,19 +1055,45 @@ class Trainer:
             
         _ = [self.model[key].eval() for key in self.model]
         total_loss = 0
+        total_main_loss = 0
+        total_commitment_loss = 0
+        total_codebook_loss = 0
         num_batches = 0
         
         with torch.no_grad():
             for batch in self.val_dataloader:
                 batch = [b.to(self.device) for b in batch]
-                loss = self.validate_one_step(batch)
+                # 修改返回值处理
+                loss_result = self.validate_one_step(batch)
+                if isinstance(loss_result, tuple) and len(loss_result) == 4:
+                    loss, main_loss, commitment_loss, codebook_loss = loss_result
+                else:
+                    # 兼容旧版本返回值
+                    loss = loss_result
+                    main_loss = commitment_loss = codebook_loss = 0
+                
                 total_loss += loss
+                total_main_loss += main_loss
+                total_commitment_loss += commitment_loss
+                total_codebook_loss += codebook_loss
                 num_batches += 1
         
         _ = [self.model[key].train() for key in self.model]
         
         if num_batches > 0:
             avg_loss = total_loss / num_batches
+            avg_main_loss = total_main_loss / num_batches
+            avg_commitment_loss = total_commitment_loss / num_batches
+            avg_codebook_loss = total_codebook_loss / num_batches
+            
+            # 打印详细的验证损失组件信息
+            if num_batches > 0:
+                print(f"\nDetailed Validation Loss Components:")
+                print(f"  Avg Main CFM Loss: {avg_main_loss:.6f}")
+                print(f"  Avg Commitment Loss: {avg_commitment_loss:.6f}")
+                print(f"  Avg Codebook Loss: {avg_codebook_loss:.6f}")
+                print(f"  Total Validation Loss: {avg_loss:.6f}")
+            
             return avg_loss
         else:
             return None
@@ -1390,8 +1448,8 @@ if __name__ == '__main__':
     parser.add_argument("--gpu", type=int, help="Which GPU id to use", default=0)
     
 
-    parser.add_argument('--distill', action='store_true',
-                       help='Enable knowledge distillation')
+    parser.add_argument('--distill', type=float, default=0.0,
+                       help='Enable knowledge distillation with specified weight (0.0 means no distillation)')
     parser.add_argument('--language', type=str, default=None,
                        help='Language for Whisper model')
     args = parser.parse_args()
