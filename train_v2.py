@@ -821,10 +821,24 @@ class Trainer:
                     # 只有在对应模型被训练且启用了蒸馏时才计算蒸馏损失
                     if self.train_cfm and self.use_distill_cfm:
                         # CFM蒸馏损失
-                        distill_loss += F.mse_loss(loss_cfm, teacher_loss_cfm.detach()) * self.distill_cfm_weight  # 使用参数指定的权重
+                        # 确保loss_cfm和teacher_loss_cfm都是张量且形状匹配
+                        if isinstance(loss_cfm, torch.Tensor) and isinstance(teacher_loss_cfm, torch.Tensor):
+                            if loss_cfm.size() == teacher_loss_cfm.size():
+                                distill_loss += F.mse_loss(loss_cfm, teacher_loss_cfm.detach()) * self.distill_cfm_weight  # 使用参数指定的权重
+                            else:
+                                print(f"Warning: Shape mismatch in CFM distillation loss - student: {loss_cfm.size()}, teacher: {teacher_loss_cfm.size()}")
+                        else:
+                            print(f"Warning: Type mismatch in CFM distillation loss - student: {type(loss_cfm)}, teacher: {type(teacher_loss_cfm)}")
                     if self.train_ar and self.use_distill_ar:
                         # AR蒸馏损失
-                        distill_loss += F.mse_loss(loss_ar, teacher_loss_ar.detach()) * self.distill_ar_weight  # 使用参数指定的权重
+                        # 确保loss_ar和teacher_loss_ar都是张量且形状匹配
+                        if isinstance(loss_ar, torch.Tensor) and isinstance(teacher_loss_ar, torch.Tensor):
+                            if loss_ar.size() == teacher_loss_ar.size():
+                                distill_loss += F.mse_loss(loss_ar, teacher_loss_ar.detach()) * self.distill_ar_weight  # 使用参数指定的权重
+                            else:
+                                print(f"Warning: Shape mismatch in AR distillation loss - student: {loss_ar.size()}, teacher: {teacher_loss_ar.size()}")
+                        else:
+                            print(f"Warning: Type mismatch in AR distillation loss - student: {type(loss_ar)}, teacher: {type(teacher_loss_ar)}")
                 loss_total = loss + distill_loss
                 self.ema_loss = loss_total.item()
 

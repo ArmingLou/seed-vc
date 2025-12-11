@@ -859,7 +859,7 @@ class Trainer:
                 y_list.append(y)
         y = torch.cat(y_list, dim=0)
 
-        loss, _ = self.model.cfm(x, target_lengths, prompt_len, cond, y)
+        loss, student_output = self.model.cfm(x, target_lengths, prompt_len, cond, y)
 
         # 如果有教师模型，添加知识蒸馏损失
         distill_loss = torch.tensor(0.0, device=self.device)
@@ -870,7 +870,22 @@ class Trainer:
                 # 使用教师模型生成目标输出
                 teacher_loss, teacher_output = self.teacher_model.cfm(x, target_lengths, prompt_len, cond, y)
             # 计算学生模型和教师模型输出之间的蒸馏损失
-            distill_loss = F.mse_loss(_, teacher_output.detach())
+            # 确保student_output和teacher_output都是张量且形状匹配
+            if isinstance(student_output, list):
+                # 如果是列表，取第一个元素
+                student_output = student_output[0] if student_output else torch.tensor(0.0, device=self.device)
+            if isinstance(teacher_output, list):
+                # 如果是列表，取第一个元素
+                teacher_output = teacher_output[0] if teacher_output else torch.tensor(0.0, device=self.device)
+            # 确保两个张量形状匹配
+            if student_output.size() == teacher_output.size():
+                distill_loss = F.mse_loss(student_output, teacher_output.detach())
+            else:
+                # 如果形状不匹配，尝试调整形状
+                min_size = min(student_output.size(0), teacher_output.size(0))
+                student_output_adj = student_output[:min_size] if student_output.size(0) > min_size else student_output
+                teacher_output_adj = teacher_output[:min_size] if teacher_output.size(0) > min_size else teacher_output
+                distill_loss = F.mse_loss(student_output_adj, teacher_output_adj.detach())
         
         # 计算各损失组件
         commitment_loss_component = (alt_commitment_loss + ori_commitment_loss) * 0.05
