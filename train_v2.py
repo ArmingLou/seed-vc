@@ -134,6 +134,14 @@ class Trainer:
         self.patience_counter = 0
         self.should_stop = False
         
+        # 初始化损失缩放因子
+        self.loss_scaling_factors = {
+            'ar': 1.0,
+            'cfm': 1.0,
+            'distill_ar': 1.0,
+            'distill_cfm': 1.0
+        }
+        
         # 学习率调度相关参数
         self.initial_lr = initial_lr  # 初始学习率
         self.min_lr = min_lr      # 最小学习率
@@ -203,6 +211,180 @@ class Trainer:
         
         # 温度系数缩放
         return kl_loss * (temperature ** 2)
+    
+    def _compute_initial_loss_scaling_factors(self):
+        """计算初始损失缩放因子，使各损失组件按指定比例调整"""
+        if self.accelerator.is_main_process:
+            print("计算初始损失缩放因子...")
+            
+        # 临时设置模型为评估模式以计算初始损失
+        self.model.eval()
+        # 如果有教师模型且使用蒸馏，也确保其处于评估模式
+        if self.teacher_model is not None and (self.use_distill_ar or self.use_distill_cfm):
+            self.teacher_model.eval()
+            
+        try:
+            # 获取一个样本批次计算初始损失
+            sample_batch = next(iter(self.train_dataloader))
+            sample_batch = [b.to(self.device) for b in sample_batch]
+            
+            with torch.no_grad():
+                # 解包样本批次
+                waves, mels, wave_lens, mel_lens = sample_batch
+                # Resample to 16kHz for ASR models
+                waves_16k = torchaudio.functional.resample(waves, self.sr, 16000)
+                wave_lengths_16k = (wave_lens.float() * 16000 / self.sr).long()
+                
+                # 计算各损失组件的原始值
+                original_loss_ar, original_loss_cfm = self.model(
+                    waves_16k.to(self.device),
+                    mels.to(self.device),
+                    wave_lengths_16k.to(self.device),
+                    mel_lens.to(self.device),
+                    forward_ar=self.train_ar,
+                    forward_cfm=self.train_cfm,
+                )
+                
+                original_ar_loss_val = original_loss_ar.item() if isinstance(original_loss_ar, torch.Tensor) else 0.0
+                original_cfm_loss_val = original_loss_cfm.item() if isinstance(original_loss_cfm, torch.Tensor) else 0.0
+                
+                # 计算蒸馏损失（如果有教师模型）
+                original_distill_ar_loss = 0.0
+                original_distill_cfm_loss = 0.0
+                
+                if self.teacher_model is not None and (self.use_distill_ar or self.use_distill_cfm):
+                    # 使用教师模型生成目标输出
+                    # 只计算需要蒸馏的模型部分的输出，提高效率
+                    teacher_forward_ar = self.train_ar and self.use_distill_ar
+                    teacher_forward_cfm = self.train_cfm and self.use_distill_cfm
+                    
+                    teacher_loss_ar, teacher_loss_cfm = self.teacher_model(
+                        waves_16k.to(self.device),
+                        mels.to(self.device),
+                        wave_lengths_16k.to(self.device),
+                        mel_lens.to(self.device),
+                        forward_ar=teacher_forward_ar,
+                        forward_cfm=teacher_forward_cfm,
+                )
+                    
+                    # 计算学生模型和教师模型输出之间的蒸馏损失
+                    # 只有在对应模型被训练且启用了蒸馏时才计算蒸馏损失
+                    if self.train_cfm and self.use_distill_cfm:
+                        # CFM蒸馏损失
+                        # 确保loss_cfm和teacher_loss_cfm都是张量且形状匹配
+                        if isinstance(original_loss_cfm, torch.Tensor) and isinstance(teacher_loss_cfm, torch.Tensor):
+                            if original_loss_cfm.size() == teacher_loss_cfm.size():
+                                # 确保数据类型一致
+                                if original_loss_cfm.dtype != teacher_loss_cfm.dtype:
+                                    if self.accelerator.is_main_process:
+                                        print(f"警告: CFM蒸馏损失数据类型不一致 - student: {original_loss_cfm.dtype}, teacher: {teacher_loss_cfm.dtype}")
+                                    teacher_loss_cfm = teacher_loss_cfm.to(original_loss_cfm.dtype)
+                                # 使用KL散度计算蒸馏损失，添加温度参数支持
+                                kl_loss = self.compute_kl_distill_loss(original_loss_cfm, teacher_loss_cfm.detach(), temperature=self.distill_temperature)
+                                original_distill_cfm_loss = kl_loss.item()
+                            else:
+                                if self.accelerator.is_main_process:
+                                    print(f"Warning: Shape mismatch in CFM distillation loss - student: {original_loss_cfm.size()}, teacher: {teacher_loss_cfm.size()}")
+                        else:
+                            if self.accelerator.is_main_process:
+                                print(f"Warning: Type mismatch in CFM distillation loss - student: {type(original_loss_cfm)}, teacher: {type(teacher_loss_cfm)}")
+                    if self.train_ar and self.use_distill_ar:
+                        # AR蒸馏损失
+                        # 确保loss_ar和teacher_loss_ar都是张量且形状匹配
+                        if isinstance(original_loss_ar, torch.Tensor) and isinstance(teacher_loss_ar, torch.Tensor):
+                            if original_loss_ar.size() == teacher_loss_ar.size():
+                                # 确保数据类型一致
+                                if original_loss_ar.dtype != teacher_loss_ar.dtype:
+                                    if self.accelerator.is_main_process:
+                                        print(f"警告: AR蒸馏损失数据类型不一致 - student: {original_loss_ar.dtype}, teacher: {teacher_loss_ar.dtype}")
+                                    teacher_loss_ar = teacher_loss_ar.to(original_loss_ar.dtype)
+                                # 使用KL散度计算蒸馏损失，添加温度参数支持
+                                kl_loss = self.compute_kl_distill_loss(original_loss_ar, teacher_loss_ar.detach(), temperature=self.distill_temperature)
+                                original_distill_ar_loss = kl_loss.item()
+                            else:
+                                if self.accelerator.is_main_process:
+                                    print(f"Warning: Shape mismatch in AR distillation loss - student: {original_loss_ar.size()}, teacher: {teacher_loss_ar.size()}")
+                        else:
+                            if self.accelerator.is_main_process:
+                                print(f"Warning: Type mismatch in AR distillation loss - student: {type(original_loss_ar)}, teacher: {type(teacher_loss_ar)}")
+                
+                # 获取原始损失值
+                original_ar_loss = original_ar_loss_val
+                original_cfm_loss = original_cfm_loss_val
+                
+                # 计算总原始损失
+                original_total_loss = original_ar_loss + original_cfm_loss + \
+                                    original_distill_ar_loss * self.distill_ar_weight + \
+                                    original_distill_cfm_loss * self.distill_cfm_weight
+                
+                if self.accelerator.is_main_process:
+                    print(f"原始损失值:")
+                    print(f"  AR损失: {original_ar_loss:.6f}")
+                    print(f"  CFM损失: {original_cfm_loss:.6f}")
+                    print(f"  AR蒸馏损失: {original_distill_ar_loss:.6f}")
+                    print(f"  CFM蒸馏损失: {original_distill_cfm_loss:.6f}")
+                    print(f"  总损失: {original_total_loss:.6f}")
+                
+                # 目标比例 1:1:self.distill_ar_weight:self.distill_cfm_weight
+                target_ar_ratio = 1.0
+                target_cfm_ratio = 1.0
+                # 如果原始损失值为0，则对应的目标比例也应为0
+                # 如果distill权重为0或原始蒸馏损失值为0，则对应的目标蒸馏比例应为0
+                target_distill_ar_ratio = 0.0 if original_distill_ar_loss == 0 else self.distill_ar_weight
+                target_distill_cfm_ratio = 0.0 if original_distill_cfm_loss == 0 else self.distill_cfm_weight
+                
+                # 计算目标损失值（保持总损失不变）
+                target_total_loss = original_total_loss
+                target_ar_loss = target_total_loss * target_ar_ratio / (
+                    target_ar_ratio + target_cfm_ratio + target_distill_ar_ratio + target_distill_cfm_ratio
+                ) if (target_ar_ratio + target_cfm_ratio + target_distill_ar_ratio + target_distill_cfm_ratio) > 0 else 0
+                target_cfm_loss = target_total_loss * target_cfm_ratio / (
+                    target_ar_ratio + target_cfm_ratio + target_distill_ar_ratio + target_distill_cfm_ratio
+                ) if (target_ar_ratio + target_cfm_ratio + target_distill_ar_ratio + target_distill_cfm_ratio) > 0 else 0
+                target_distill_ar_loss = target_total_loss * target_distill_ar_ratio / (
+                    target_ar_ratio + target_cfm_ratio + target_distill_ar_ratio + target_distill_cfm_ratio
+                ) if (target_ar_ratio + target_cfm_ratio + target_distill_ar_ratio + target_distill_cfm_ratio) > 0 else 0
+                target_distill_cfm_loss = target_total_loss * target_distill_cfm_ratio / (
+                    target_ar_ratio + target_cfm_ratio + target_distill_ar_ratio + target_distill_cfm_ratio
+                ) if (target_ar_ratio + target_cfm_ratio + target_distill_ar_ratio + target_distill_cfm_ratio) > 0 else 0
+                
+                if self.accelerator.is_main_process:
+                    print(f"目标损失值:")
+                    print(f"  AR损失: {target_ar_loss:.6f}")
+                    print(f"  CFM损失: {target_cfm_loss:.6f}")
+                    print(f"  AR蒸馏损失: {target_distill_ar_loss:.6f}")
+                    print(f"  CFM蒸馏损失: {target_distill_cfm_loss:.6f}")
+                    print(f"  总损失: {target_total_loss:.6f}")
+                
+                # 计算缩放因子
+                self.loss_scaling_factors = {}
+                self.loss_scaling_factors['ar'] = target_ar_loss / (original_ar_loss + 1e-8) if original_ar_loss > 0 else 0.0
+                self.loss_scaling_factors['cfm'] = target_cfm_loss / (original_cfm_loss + 1e-8) if original_cfm_loss > 0 else 0.0
+                self.loss_scaling_factors['distill_ar'] = target_distill_ar_loss / (original_distill_ar_loss * self.distill_ar_weight + 1e-8) if original_distill_ar_loss > 0 else 0.0
+                self.loss_scaling_factors['distill_cfm'] = target_distill_cfm_loss / (original_distill_cfm_loss * self.distill_cfm_weight + 1e-8) if original_distill_cfm_loss > 0 else 0.0
+                
+                if self.accelerator.is_main_process:
+                    print(f"计算得到的缩放因子:")
+                    print(f"  AR损失缩放因子: {self.loss_scaling_factors['ar']:.6f}")
+                    print(f"  CFM损失缩放因子: {self.loss_scaling_factors['cfm']:.6f}")
+                    print(f"  AR蒸馏损失缩放因子: {self.loss_scaling_factors['distill_ar']:.6f}")
+                    print(f"  CFM蒸馏损失缩放因子: {self.loss_scaling_factors['distill_cfm']:.6f}")
+                
+        except Exception as e:
+            if self.accelerator.is_main_process:
+                print(f"计算初始损失缩放因子时出错: {e}")
+            # 使用默认缩放因子
+            self.loss_scaling_factors = {
+                'ar': 1.0,
+                'cfm': 1.0,
+                'distill_ar': self.distill_ar_weight ,
+                'distill_cfm': self.distill_cfm_weight
+            }
+        
+        # 恢复模型训练模式
+        self.model.train()
+        if self.teacher_model is not None and (self.use_distill_ar or self.use_distill_cfm):
+            self.teacher_model.eval()
 
     def _init_dataloader(self, data_dir, batch_size, num_workers, spect_params, sr):
         self.spect_params = spect_params
@@ -701,6 +883,11 @@ class Trainer:
         
         print(f"Starting training from epoch {self.epoch}, step {self.iters} At {datetime.datetime.now()}")
         
+        # 在训练开始前计算初始损失缩放因子（如果启用了蒸馏）
+        if (self.use_distill_ar or self.use_distill_cfm) and \
+           ((self.train_ar and self.use_distill_ar) or (self.train_cfm and self.use_distill_cfm)):
+            self._compute_initial_loss_scaling_factors()
+        
         for epoch in range(self.max_epochs):
             epoch_start_time = time.time()
             
@@ -850,7 +1037,11 @@ class Trainer:
                     forward_cfm=self.train_cfm,
                 )
 
-                loss = loss_ar + loss_cfm
+                # 应用损失缩放因子（如果已计算）
+                scaled_loss_ar = loss_ar * self.loss_scaling_factors['ar'] if isinstance(loss_ar, torch.Tensor) else torch.tensor(0.0, device=self.device)
+                scaled_loss_cfm = loss_cfm * self.loss_scaling_factors['cfm'] if isinstance(loss_cfm, torch.Tensor) else torch.tensor(0.0, device=self.device)
+                
+                loss = scaled_loss_ar + scaled_loss_cfm
                 
                 # 如果有教师模型，添加知识蒸馏损失
                 distill_loss = 0
@@ -899,7 +1090,9 @@ class Trainer:
                                     teacher_loss_cfm = teacher_loss_cfm.to(loss_cfm.dtype)
                                 # 使用KL散度计算蒸馏损失，添加温度参数支持
                                 kl_loss = self.compute_kl_distill_loss(loss_cfm, teacher_loss_cfm.detach(), temperature=self.distill_temperature)
-                                distill_loss += kl_loss * self.distill_cfm_weight  # 使用参数指定的权重
+                                # 应用损失缩放因子和权重
+                                scaled_distill_cfm_loss = kl_loss * self.loss_scaling_factors['distill_cfm']
+                                distill_loss += scaled_distill_cfm_loss * self.distill_cfm_weight
                             else:
                                 print(f"Warning: Shape mismatch in CFM distillation loss - student: {loss_cfm.size()}, teacher: {teacher_loss_cfm.size()}")
                         else:
@@ -915,7 +1108,9 @@ class Trainer:
                                     teacher_loss_ar = teacher_loss_ar.to(loss_ar.dtype)
                                 # 使用KL散度计算蒸馏损失，添加温度参数支持
                                 kl_loss = self.compute_kl_distill_loss(loss_ar, teacher_loss_ar.detach(), temperature=self.distill_temperature)
-                                distill_loss += kl_loss * self.distill_ar_weight  # 使用参数指定的权重
+                                # 应用损失缩放因子和权重
+                                scaled_distill_ar_loss = kl_loss * self.loss_scaling_factors['distill_ar']
+                                distill_loss += scaled_distill_ar_loss * self.distill_ar_weight
                             else:
                                 print(f"Warning: Shape mismatch in AR distillation loss - student: {loss_ar.size()}, teacher: {teacher_loss_ar.size()}")
                         else:
@@ -995,7 +1190,7 @@ class Trainer:
                     print(f"Learning rate manually adjusted from {current_lr:.2e} to 《{new_lr:.2e}》 based on validation loss plateau")
 
         # Log training progress
-        self._log_training_progress(epoch, i, loss_total, loss_ar, loss_cfm, grad_norm_g, distill_loss)
+        self._log_training_progress(epoch, i, loss_total, scaled_loss_ar, scaled_loss_cfm, grad_norm_g, distill_loss)
 
         # Save checkpoint
         if self.iters % self.save_interval == 0 and self.accelerator.is_main_process:

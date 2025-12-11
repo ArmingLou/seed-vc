@@ -99,6 +99,14 @@ class Trainer:
         if not hasattr(self, 'switched_to_val_scheduler'):
             self.switched_to_val_scheduler = False  # 默认初始化为False
         
+        # 初始化损失缩放因子
+        self.loss_scaling_factors = {
+            'main': 1.0,
+            'commitment': 1.0,
+            'codebook': 1.0,
+            'distill': 1.0
+        }
+        
         # 按文件名顺序加载数据以确保训练的一致性
         shuffle_data = False  # 默认情况下不打乱数据，按文件名顺序加载
         
@@ -460,8 +468,7 @@ class Trainer:
         kl_loss = F.kl_div(torch.log(student_probs), teacher_probs, reduction='batchmean')
         
         # 温度系数缩放
-        return kl_loss * (temperature ** 2)
-        
+        return kl_loss * (temperature ** 2)        
     def _init_lr_scheduler(self):
         """初始化学习率调度器"""
         # 为每个优化器创建预热和余弦退火调度器
@@ -607,7 +614,248 @@ class Trainer:
             print(f"教师模型加载完成: {teacher_checkpoint}")
         else:
             print("未找到教师模型检查点，将不使用知识蒸馏")
-
+        
+    def _compute_initial_loss_scaling_factors(self):
+        """计算初始损失缩放因子，使各损失组件按指定比例调整"""
+        print("计算初始损失缩放因子...")
+            
+        # 临时设置模型为评估模式以计算初始损失
+        _ = [self.model[key].eval() for key in self.model]
+        # 如果有教师模型且使用蒸馏，也确保其处于评估模式
+        if self.teacher_model is not None and self.use_distill:
+            _ = [self.teacher_model[key].eval() for key in self.teacher_model]
+            
+        try:
+            # 获取一个样本批次计算初始损失
+            sample_batch = next(iter(self.train_dataloader))
+            sample_batch = [b.to(self.device) for b in sample_batch]
+                
+            with torch.no_grad():
+                # 解包样本批次
+                waves, mels, wave_lengths, mel_input_length = sample_batch
+                    
+                B = waves.size(0)
+                target_size = mels.size(2)
+                target = mels
+                target_lengths = mel_input_length
+                    
+                # get speaker embedding
+                if self.sr != 22050:
+                    waves_22k = torchaudio.functional.resample(waves, self.sr, 22050)
+                    wave_lengths_22k = (wave_lengths.float() * 22050 / self.sr).long()
+                else:
+                    waves_22k = waves
+                    wave_lengths_22k = wave_lengths
+                se_batch = self.tone_color_converter.extract_se(waves_22k, wave_lengths_22k)
+                    
+                # Use deterministic selection of reference speaker embedding
+                # Generate a deterministic index based on current iteration and batch size
+                ref_se_indices = [(0 * B + i) % len(self.se_db) for i in range(B)]
+                ref_se_idx = torch.tensor(ref_se_indices)
+                ref_se = self.se_db[ref_se_idx].to(self.device)
+                    
+                # convert
+                converted_waves_22k = self.tone_color_converter.convert(
+                    waves_22k, wave_lengths_22k, se_batch, ref_se
+                ).squeeze(1)
+                    
+                if self.sr != 22050:
+                    converted_waves = torchaudio.functional.resample(converted_waves_22k, 22050, self.sr)
+                else:
+                    converted_waves = converted_waves_22k
+                    
+                waves_16k = torchaudio.functional.resample(waves, self.sr, 16000)
+                wave_lengths_16k = (wave_lengths.float() * 16000 / self.sr).long()
+                converted_waves_16k = torchaudio.functional.resample(converted_waves, self.sr, 16000)
+                    
+                # extract S_alt (perturbed speech tokens)
+                S_ori = self.semantic_fn(waves_16k)
+                S_alt = self.semantic_fn(converted_waves_16k)
+                    
+                if self.f0_condition:
+                    F0_ori = self.rmvpe.infer_from_audio_batch(waves_16k)
+                else:
+                    F0_ori = None
+                    
+                # interpolate speech token to match acoustic feature length
+                alt_cond, _, alt_codes, alt_commitment_loss, alt_codebook_loss = (
+                    self.model.length_regulator(S_alt, ylens=target_lengths, f0=F0_ori)
+                )
+                ori_cond, _, ori_codes, ori_commitment_loss, ori_codebook_loss = (
+                    self.model.length_regulator(S_ori, ylens=target_lengths, f0=F0_ori)
+                )
+                if alt_commitment_loss is None:
+                    alt_commitment_loss = torch.tensor(0.0, device=self.device)
+                    alt_codebook_loss = torch.tensor(0.0, device=self.device)
+                    ori_commitment_loss = torch.tensor(0.0, device=self.device)
+                    ori_codebook_loss = torch.tensor(0.0, device=self.device)
+                    
+                # deterministically set a length as prompt
+                # Generate deterministic random-like values based on current iteration
+                torch.manual_seed(0)
+                prompt_len_max = target_lengths - 1
+                prompt_len = (torch.rand([B], device=alt_cond.device) * prompt_len_max).floor().long()
+                prompt_len[torch.rand([B], device=alt_cond.device) < 0.1] = 0
+                    
+                # for prompt cond token, use ori_cond instead of alt_cond
+                cond = alt_cond.clone()
+                for bib in range(B):
+                    cond[bib, :prompt_len[bib]] = ori_cond[bib, :prompt_len[bib]]
+                    
+                # diffusion target
+                common_min_len = min(target_size, cond.size(1))
+                target = target[:, :, :common_min_len]
+                cond = cond[:, :common_min_len]
+                target_lengths = torch.clamp(target_lengths, max=common_min_len)
+                x = target
+                    
+                # style vectors are extracted from the prompt only
+                feat_list = []
+                for bib in range(B):
+                    # Check if we're using MPS device and handle accordingly
+                    if self.device.type == "mps":
+                        # MPS doesn't support ComplexFloat type, compute on CPU and move back
+                        wave_cpu = waves_16k[bib:bib + 1, :wave_lengths_16k[bib]].cpu()
+                        feat = kaldi.fbank(
+                            wave_cpu,
+                            num_mel_bins=80,
+                            dither=0,
+                            sample_frequency=16000
+                        )
+                        # Move the result back to MPS device
+                        feat = feat.to(self.device)
+                    else:
+                        feat = kaldi.fbank(
+                            waves_16k[bib:bib + 1, :wave_lengths_16k[bib]],
+                            num_mel_bins=80,
+                            dither=0,
+                            sample_frequency=16000
+                        )
+                    feat = feat - feat.mean(dim=0, keepdim=True)
+                    feat_list.append(feat)
+                y_list = []
+                with torch.no_grad():
+                    for feat in feat_list:
+                        y = self.sv_fn(feat.unsqueeze(0))
+                        y_list.append(y)
+                y = torch.cat(y_list, dim=0)
+                    
+                # 计算各损失组件的原始值
+                original_loss, student_output = self.model.cfm(x, target_lengths, prompt_len, cond, y)
+                    
+                # 计算承诺损失和码本损失
+                original_alt_commitment_loss = alt_commitment_loss
+                original_ori_commitment_loss = ori_commitment_loss
+                original_alt_codebook_loss = alt_codebook_loss
+                original_ori_codebook_loss = ori_codebook_loss
+                    
+                # 计算蒸馏损失（如果有教师模型）
+                original_distill_loss = torch.tensor(0.0, device=self.device)
+                if self.teacher_model is not None and self.use_distill:
+                    with torch.no_grad():
+                        # 使用教师模型生成目标输出
+                        teacher_loss, teacher_output = self.teacher_model.cfm(x, target_lengths, prompt_len, cond, y)
+                        
+                    # 确保student_output和teacher_output都是张量且形状匹配
+                    if isinstance(student_output, list):
+                        # 如果是列表，取第一个元素
+                        student_output = student_output[0] if student_output else torch.tensor(0.0, device=self.device)
+                    if isinstance(teacher_output, list):
+                        # 如果是列表，取第一个元素
+                        teacher_output = teacher_output[0] if teacher_output else torch.tensor(0.0, device=self.device)
+                    # 确保数据类型一致
+                    if student_output.dtype != teacher_output.dtype:
+                        print(f"警告: 蒸馏损失数据类型不一致 - student: {student_output.dtype}, teacher: {teacher_output.dtype}")
+                        teacher_output = teacher_output.to(student_output.dtype)
+                    # 确保两个张量形状匹配
+                    if student_output.size() == teacher_output.size():
+                        # 使用KL散度计算蒸馏损失，添加温度参数支持
+                        original_distill_loss = self.compute_kl_distill_loss(student_output, teacher_output.detach(), temperature=self.distill_temperature)
+                    else:
+                        # 如果形状不匹配，尝试调整形状
+                        min_size = min(student_output.size(0), teacher_output.size(0))
+                        student_output_adj = student_output[:min_size] if student_output.size(0) > min_size else student_output
+                        teacher_output_adj = teacher_output[:min_size] if teacher_output.size(0) > min_size else teacher_output
+                        # 使用KL散度计算蒸馏损失，添加温度参数支持
+                        original_distill_loss = self.compute_kl_distill_loss(student_output_adj, teacher_output_adj.detach(), temperature=self.distill_temperature)
+                    
+                # 获取原始损失值
+                original_main_loss = original_loss.item()
+                original_commitment_loss = (original_alt_commitment_loss + original_ori_commitment_loss).item()
+                original_codebook_loss = (original_ori_codebook_loss + original_alt_codebook_loss).item()
+                original_distill_loss_val = original_distill_loss.item()
+                    
+                # 计算总原始损失
+                original_total_loss = original_main_loss + \
+                                    original_commitment_loss + \
+                                    original_codebook_loss + \
+                                    original_distill_loss_val
+                    
+                print(f"原始损失值:")
+                print(f"  主CFM损失: {original_main_loss:.6f}")
+                print(f"  承诺损失: {original_commitment_loss:.6f}")
+                print(f"  码本损失: {original_codebook_loss:.6f}")
+                print(f"  蒸馏损失: {original_distill_loss_val:.6f}")
+                print(f"  总损失: {original_total_loss:.6f}")
+                    
+                # 目标比例 1:0.05:0.15:self.distill_weight
+                # 如果原始损失值为0，则对应的目标比例也应为0
+                target_main_ratio = 1.0
+                target_commitment_ratio = 0.0 if original_commitment_loss == 0 else 0.05
+                target_codebook_ratio = 0.0 if original_codebook_loss == 0 else 0.15
+                # 如果distill_weight为0或原始蒸馏损失值为0，则目标蒸馏比例应为0
+                target_distill_ratio = 0.0 if original_distill_loss_val == 0 else self.distill_weight
+                    
+                # 计算目标损失值（保持总损失不变）
+                target_total_loss = original_total_loss
+                target_main_loss = target_total_loss * target_main_ratio / (
+                    target_main_ratio + target_commitment_ratio + target_codebook_ratio + target_distill_ratio
+                ) if (target_main_ratio + target_commitment_ratio + target_codebook_ratio + target_distill_ratio) > 0 else 0
+                target_commitment_loss = target_total_loss * target_commitment_ratio / (
+                    target_main_ratio + target_commitment_ratio + target_codebook_ratio + target_distill_ratio
+                ) if (target_main_ratio + target_commitment_ratio + target_codebook_ratio + target_distill_ratio) > 0 else 0
+                target_codebook_loss = target_total_loss * target_codebook_ratio / (
+                    target_main_ratio + target_commitment_ratio + target_codebook_ratio + target_distill_ratio
+                ) if (target_main_ratio + target_commitment_ratio + target_codebook_ratio + target_distill_ratio) > 0 else 0
+                target_distill_loss = target_total_loss * target_distill_ratio / (
+                    target_main_ratio + target_commitment_ratio + target_codebook_ratio + target_distill_ratio
+                ) if (target_main_ratio + target_commitment_ratio + target_codebook_ratio + target_distill_ratio) > 0 else 0
+                    
+                print(f"目标损失值:")
+                print(f"  主CFM损失: {target_main_loss:.6f}")
+                print(f"  承诺损失: {target_commitment_loss:.6f}")
+                print(f"  码本损失: {target_codebook_loss:.6f}")
+                print(f"  蒸馏损失: {target_distill_loss:.6f}")
+                print(f"  总损失: {target_total_loss:.6f}")
+                    
+                # 计算缩放因子
+                self.loss_scaling_factors = {}
+                self.loss_scaling_factors['main'] = target_main_loss / (original_main_loss + 1e-8) if original_main_loss > 0 else 0.0
+                self.loss_scaling_factors['commitment'] = target_commitment_loss / (original_commitment_loss + 1e-8) if original_commitment_loss > 0 else 0.0
+                self.loss_scaling_factors['codebook'] = target_codebook_loss / (original_codebook_loss + 1e-8) if original_codebook_loss > 0 else 0.0
+                self.loss_scaling_factors['distill'] = target_distill_loss / (original_distill_loss_val + 1e-8) if original_distill_loss_val > 0 else 0.0
+                    
+                print(f"计算得到的缩放因子:")
+                print(f"  主CFM缩放因子: {self.loss_scaling_factors['main']:.6f}")
+                print(f"  承诺损失缩放因子: {self.loss_scaling_factors['commitment']:.6f}")
+                print(f"  码本损失缩放因子: {self.loss_scaling_factors['codebook']:.6f}")
+                print(f"  蒸馏损失缩放因子: {self.loss_scaling_factors['distill']:.6f}")
+                    
+        except Exception as e:
+            print(f"计算初始损失缩放因子时出错: {e}")
+            # 使用默认缩放因子
+            self.loss_scaling_factors = {
+                'main': 1.0,
+                'commitment': 0.05,
+                'codebook': 0.15,
+                'distill': self.distill_weight
+            }
+            
+        # 恢复模型训练模式
+        _ = [self.model[key].train() for key in self.model]
+        if self.teacher_model is not None and self.use_distill:
+            _ = [self.teacher_model[key].eval() for key in self.teacher_model]
+        
     def build_semantic_fn(self, device, config, fp16=True, language=None):
         speech_tokenizer_type = config['model_params']['speech_tokenizer'].get('type', 'cosyvoice')
         if speech_tokenizer_type == 'whisper':
@@ -935,12 +1183,16 @@ class Trainer:
                 distill_loss = self.compute_kl_distill_loss(student_output_adj, teacher_output_adj.detach(), temperature=self.distill_temperature)
         
         # 计算各损失组件
-        commitment_loss_component = (alt_commitment_loss + ori_commitment_loss) * 0.05
-        codebook_loss_component = (ori_codebook_loss + alt_codebook_loss) * 0.15
-        distill_loss_component = distill_loss * self.distill_weight  # 使用参数指定的权重
+        # 使用动态损失平衡机制，根据初始化时计算的缩放因子调整各损失组件
+        commitment_loss_component = (alt_commitment_loss + ori_commitment_loss) * self.loss_scaling_factors['commitment']
+        codebook_loss_component = (ori_codebook_loss + alt_codebook_loss) * self.loss_scaling_factors['codebook']
+        distill_loss_component = distill_loss * self.loss_scaling_factors['distill']  # 使用动态计算的蒸馏损失缩放因子
+        
+        # 主CFM损失也使用缩放因子
+        scaled_main_loss = loss * self.loss_scaling_factors['main']
         
         loss_total = (
-            loss +
+            scaled_main_loss +
             commitment_loss_component +
             codebook_loss_component +
             distill_loss_component
@@ -949,17 +1201,17 @@ class Trainer:
         # 打印详细的损失组件信息（每log_interval步打印一次）
         if self.iters % self.log_interval == 0:
             print(f"\nDetailed Loss Components at epoch {self.epoch}, step {self.iters}:")
-            print(f"  Main CFM Loss: {loss.item():.6f}")
-            print(f"  Commitment Loss: {commitment_loss_component.item():.6f} (alt: {alt_commitment_loss.item():.6f}, ori: {ori_commitment_loss.item():.6f})")
-            print(f"  Codebook Loss: {codebook_loss_component.item():.6f} (alt: {alt_codebook_loss.item():.6f}, ori: {ori_codebook_loss.item():.6f})")
+            print(f"  Main CFM Loss: {scaled_main_loss.item():.6f} (raw: {loss.item():.6f}, scale: {self.loss_scaling_factors['main']:.6f})")
+            print(f"  Commitment Loss: {commitment_loss_component.item():.6f} (alt: {alt_commitment_loss.item():.6f}, ori: {ori_commitment_loss.item():.6f}, scale: {self.loss_scaling_factors['commitment']:.6f})")
+            print(f"  Codebook Loss: {codebook_loss_component.item():.6f} (alt: {alt_codebook_loss.item():.6f}, ori: {ori_codebook_loss.item():.6f}, scale: {self.loss_scaling_factors['codebook']:.6f})")
             if self.teacher_model is not None and self.use_distill:
-                print(f"  Distill Loss: {distill_loss_component.item():.6f} (raw: {distill_loss.item():.6f})")
+                print(f"  Distill Loss: {distill_loss_component.item():.6f} (raw: {distill_loss.item():.6f}, scale: {self.loss_scaling_factors['distill']:.6f})")
             print(f"  Total Training Loss: {loss_total.item():.6f}")
             # 同时打印各组件占总损失的比例
             total_components = loss_total.item()
             if total_components > 0:
                 print(f"  Loss Composition:")
-                print(f"    Main CFM: {loss.item()/total_components*100:.1f}%")
+                print(f"    Main CFM: {scaled_main_loss.item()/total_components*100:.1f}%")
                 print(f"    Commitment: {commitment_loss_component.item()/total_components*100:.1f}%")
                 print(f"    Codebook: {codebook_loss_component.item()/total_components*100:.1f}%")
                 if self.teacher_model is not None and self.use_distill:
@@ -1371,6 +1623,9 @@ class Trainer:
         # For logging, we use the same value
         start_epoch = self.epoch
         print(f"Starting training from epoch {start_epoch}, step {self.iters} At {datetime.datetime.now()}")
+        
+        # 计算初始损失缩放因子
+        self._compute_initial_loss_scaling_factors()
         
         # Ensure deterministic behavior by setting seeds based on current state
         seed = 1234 + self.iters
