@@ -875,6 +875,16 @@ class Trainer:
         if self.teacher_model is not None and self.use_distill:
             # 确保教师模型处于评估模式
             _ = [self.teacher_model[key].eval() for key in self.teacher_model]
+            # 添加额外的检查，确保教师模型的所有模块都处于评估模式
+            def check_and_set_eval(model, model_name):
+                for name, module in model.named_modules():
+                    if hasattr(module, 'training') and module.training:
+                        print(f"警告: {model_name}中的模块 {name} 未处于评估模式，正在强制设置...")
+                        module.eval()
+            
+            for key in self.teacher_model:
+                check_and_set_eval(self.teacher_model[key], f"教师模型 {key}")
+            
             with torch.no_grad():
                 # 使用教师模型生成目标输出
                 teacher_loss, teacher_output = self.teacher_model.cfm(x, target_lengths, prompt_len, cond, y)
@@ -886,6 +896,10 @@ class Trainer:
             if isinstance(teacher_output, list):
                 # 如果是列表，取第一个元素
                 teacher_output = teacher_output[0] if teacher_output else torch.tensor(0.0, device=self.device)
+            # 确保数据类型一致
+            if student_output.dtype != teacher_output.dtype:
+                print(f"警告: 蒸馏损失数据类型不一致 - student: {student_output.dtype}, teacher: {teacher_output.dtype}")
+                teacher_output = teacher_output.to(student_output.dtype)
             # 确保两个张量形状匹配
             if student_output.size() == teacher_output.size():
                 distill_loss = F.mse_loss(student_output, teacher_output.detach())
@@ -1246,6 +1260,9 @@ class Trainer:
             
             batch = [b.to(self.device) for b in batch]
             loss = self.train_one_step(batch)
+            # 使用指数移动平均计算ema_loss，与train_v2.py保持一致
+            if not hasattr(self, 'loss_smoothing_rate'):
+                self.loss_smoothing_rate = 0.99
             self.ema_loss = (
                 self.ema_loss * self.loss_smoothing_rate + loss * (1 - self.loss_smoothing_rate)
                 if self.iters > 0 else loss

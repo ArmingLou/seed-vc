@@ -573,6 +573,14 @@ class Trainer:
         # 如果有教师模型，也确保其处于评估模式
         if self.teacher_model is not None:
             self.teacher_model.eval()
+            # 确保教师模型的所有模块都处于评估模式
+            def check_and_set_eval(model, model_name):
+                for name, module in model.named_modules():
+                    if hasattr(module, 'training') and module.training:
+                        print(f"警告: {model_name}中的模块 {name} 未处于评估模式，正在强制设置...")
+                        module.eval()
+            
+            check_and_set_eval(self.teacher_model, "教师模型")
         total_loss = 0
         total_ar_loss = 0
         total_cfm_loss = 0
@@ -713,6 +721,15 @@ class Trainer:
                         if self.teacher_model.training:
                             print("警告: 教师模型未处于评估模式，正在强制设置...")
                             self.teacher_model.eval()
+                        
+                        # 确保教师模型的所有模块都处于评估模式
+                        def check_and_set_eval(model, model_name):
+                            for name, module in model.named_modules():
+                                if hasattr(module, 'training') and module.training:
+                                    print(f"警告: {model_name}中的模块 {name} 未处于评估模式，正在强制设置...")
+                                    module.eval()
+                        
+                        check_and_set_eval(self.teacher_model, "教师模型")
                     init_epoch = True
                 
                 # Process batch with fp16 error handling
@@ -819,6 +836,16 @@ class Trainer:
                     if self.teacher_model.training:
                         print("警告: 教师模型未处于评估模式，正在强制设置...")
                         self.teacher_model.eval()
+                    
+                    # 确保教师模型的所有模块都处于评估模式
+                    def check_and_set_eval(model, model_name):
+                        for name, module in model.named_modules():
+                            if hasattr(module, 'training') and module.training:
+                                print(f"警告: {model_name}中的模块 {name} 未处于评估模式，正在强制设置...")
+                                module.eval()
+                    
+                    check_and_set_eval(self.teacher_model, "教师模型")
+                    
                     with torch.no_grad():
                         # 使用教师模型生成目标输出
                         # 只计算需要蒸馏的模型部分的输出，提高效率
@@ -841,6 +868,10 @@ class Trainer:
                         # 确保loss_cfm和teacher_loss_cfm都是张量且形状匹配
                         if isinstance(loss_cfm, torch.Tensor) and isinstance(teacher_loss_cfm, torch.Tensor):
                             if loss_cfm.size() == teacher_loss_cfm.size():
+                                # 确保数据类型一致
+                                if loss_cfm.dtype != teacher_loss_cfm.dtype:
+                                    print(f"警告: CFM蒸馏损失数据类型不一致 - student: {loss_cfm.dtype}, teacher: {teacher_loss_cfm.dtype}")
+                                    teacher_loss_cfm = teacher_loss_cfm.to(loss_cfm.dtype)
                                 distill_loss += F.mse_loss(loss_cfm, teacher_loss_cfm.detach()) * self.distill_cfm_weight  # 使用参数指定的权重
                             else:
                                 print(f"Warning: Shape mismatch in CFM distillation loss - student: {loss_cfm.size()}, teacher: {teacher_loss_cfm.size()}")
@@ -851,6 +882,10 @@ class Trainer:
                         # 确保loss_ar和teacher_loss_ar都是张量且形状匹配
                         if isinstance(loss_ar, torch.Tensor) and isinstance(teacher_loss_ar, torch.Tensor):
                             if loss_ar.size() == teacher_loss_ar.size():
+                                # 确保数据类型一致
+                                if loss_ar.dtype != teacher_loss_ar.dtype:
+                                    print(f"警告: AR蒸馏损失数据类型不一致 - student: {loss_ar.dtype}, teacher: {teacher_loss_ar.dtype}")
+                                    teacher_loss_ar = teacher_loss_ar.to(loss_ar.dtype)
                                 distill_loss += F.mse_loss(loss_ar, teacher_loss_ar.detach()) * self.distill_ar_weight  # 使用参数指定的权重
                             else:
                                 print(f"Warning: Shape mismatch in AR distillation loss - student: {loss_ar.size()}, teacher: {teacher_loss_ar.size()}")
