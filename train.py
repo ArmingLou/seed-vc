@@ -573,6 +573,15 @@ class Trainer:
                     param.requires_grad = False
             # 确保教师模型始终处于评估模式
             _ = [self.teacher_model[key].eval() for key in self.teacher_model]
+            # 添加额外的检查，确保教师模型参数确实被冻结
+            teacher_params_frozen = all(param.requires_grad == False for key in self.teacher_model for param in self.teacher_model[key].parameters())
+            print(f"教师模型参数冻结状态检查: {teacher_params_frozen}")
+            if not teacher_params_frozen:
+                print("警告: 教师模型参数未完全冻结!")
+                # 强制冻结所有参数
+                for key in self.teacher_model:
+                    for param in self.teacher_model[key].parameters():
+                        param.requires_grad = False
             print(f"教师模型加载完成: {teacher_checkpoint}")
         else:
             print("未找到教师模型检查点，将不使用知识蒸馏")
@@ -1189,6 +1198,11 @@ class Trainer:
         # 如果有教师模型，确保其处于评估模式
         if self.teacher_model is not None:
             _ = [self.teacher_model[key].eval() for key in self.teacher_model]
+            # 添加额外的检查，确保教师模型确实处于评估模式
+            teacher_in_eval_mode = all(not self.teacher_model[key].training for key in self.teacher_model)
+            if not teacher_in_eval_mode:
+                print("警告: 教师模型未处于评估模式，正在强制设置...")
+                _ = [self.teacher_model[key].eval() for key in self.teacher_model]
         
         firstItersIdx = self.iters % len(self.train_dataloader)
         if firstItersIdx == 0 and self.iters != 0:

@@ -503,6 +503,15 @@ class Trainer:
                 for p in self.teacher_model.parameters():
                     p.requires_grad = False
                 
+                # 添加额外的检查，确保教师模型参数确实被冻结
+                teacher_params_frozen = all(p.requires_grad == False for p in self.teacher_model.parameters())
+                print(f"教师模型参数冻结状态检查: {teacher_params_frozen}")
+                if not teacher_params_frozen:
+                    print("警告: 教师模型参数未完全冻结!")
+                    # 强制冻结所有参数
+                    for p in self.teacher_model.parameters():
+                        p.requires_grad = False
+                
                 # 根据训练参数和蒸馏参数决定加载哪些教师模型部分
                 ar_checkpoint_path = teacher_model_ar_path if self.train_ar and self.use_distill_ar and has_ar_teacher else None
                 cfm_checkpoint_path = teacher_model_cfm_path if self.train_cfm and self.use_distill_cfm and has_cfm_teacher else None
@@ -700,6 +709,10 @@ class Trainer:
                     # 如果有教师模型，确保其处于评估模式
                     if self.teacher_model is not None:
                         self.teacher_model.eval()
+                        # 添加额外的检查，确保教师模型确实处于评估模式
+                        if self.teacher_model.training:
+                            print("警告: 教师模型未处于评估模式，正在强制设置...")
+                            self.teacher_model.eval()
                     init_epoch = True
                 
                 # Process batch with fp16 error handling
@@ -802,6 +815,10 @@ class Trainer:
                 if self.teacher_model is not None:
                     # 确保教师模型处于评估模式
                     self.teacher_model.eval()
+                    # 添加额外的检查，确保教师模型确实处于评估模式
+                    if self.teacher_model.training:
+                        print("警告: 教师模型未处于评估模式，正在强制设置...")
+                        self.teacher_model.eval()
                     with torch.no_grad():
                         # 使用教师模型生成目标输出
                         # 只计算需要蒸馏的模型部分的输出，提高效率
