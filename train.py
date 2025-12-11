@@ -976,11 +976,10 @@ class Trainer:
                 self.model.length_regulator(S_ori, ylens=target_lengths, f0=F0_ori)
             )
             if alt_commitment_loss is None:
-                alt_commitment_loss = 0
-                alt_codebook_loss = 0
-                ori_commitment_loss = 0
-                ori_codebook_loss = 0
-            
+                alt_commitment_loss = torch.tensor(0.0, device=self.device)
+                alt_codebook_loss = torch.tensor(0.0, device=self.device)
+                ori_commitment_loss = torch.tensor(0.0, device=self.device)
+                ori_codebook_loss = torch.tensor(0.0, device=self.device)            
             # deterministically set a length as prompt
             # Generate deterministic random-like values based on current iteration
             torch.manual_seed(self.iters)
