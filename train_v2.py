@@ -935,11 +935,15 @@ class Trainer:
                 # 自适应梯度裁剪 - 根据损失值动态调整裁剪阈值
                 # 基础阈值为self.grad_clip_norm，但当损失较大时会降低阈值
                 base_clip_norm = self.grad_clip_norm
-                adaptive_clip_norm = max(0.1, min(base_clip_norm, 10.0 / (loss_total.item() + 1e-8)))
+                # 降低最低限制，允许更严格的梯度裁剪
+                adaptive_clip_norm = max(0.01, min(base_clip_norm, 10.0 / (loss_total.item() + 1e-8)))
                 grad_norm_g = torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(), adaptive_clip_norm
                 )
                 self.optimizer.step()
+                # Increment iteration counter
+                # self.iters += 1
+        
         except RuntimeError as e:
             if "LayerNormKernelImpl" in str(e) and self.requested_fp16:
                 print(f"Warning: Encountered LayerNorm error with fp16 at step {self.iters}, attempting to fall back to fp32 training...")
@@ -948,8 +952,6 @@ class Trainer:
             else:
                 # 如果不是fp16相关的错误，重新抛出异常
                 raise e
-        # Increment iteration counter
-        # self.iters += 1
         
         # 应用预热和余弦退火调度
         if self.iters < self.warmup_steps:
@@ -1156,6 +1158,8 @@ def copy_final_models(log_dir, run_name, train_cfm=False, train_ar=False, config
         if os.path.exists(config_file):
             shutil.copy2(config_file, os.path.join(base_log_dir, os.path.basename(config_path)))
             print(f"已将配置文件拷贝到: {os.path.join(base_log_dir, os.path.basename(config_path))}")
+
+
 def main(args):
     # 如果config参数为空，则使用默认值
     if not args.config:

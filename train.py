@@ -971,7 +971,8 @@ class Trainer:
         # 自适应梯度裁剪 - 根据损失值动态调整裁剪阈值
         # 基础阈值为self.grad_clip_norm，但当损失较大时会降低阈值
         base_clip_norm = self.grad_clip_norm
-        adaptive_clip_norm = max(0.1, min(base_clip_norm, 10.0 / (loss_total.item() + 1e-8)))
+        # 降低最低限制，允许更严格的梯度裁剪
+        adaptive_clip_norm = max(0.01, min(base_clip_norm, 10.0 / (loss_total.item() + 1e-8)))
         torch.nn.utils.clip_grad_norm_(self.model.cfm.parameters(), adaptive_clip_norm)
         torch.nn.utils.clip_grad_norm_(self.model.length_regulator.parameters(), adaptive_clip_norm)
         
