@@ -241,8 +241,12 @@ class Trainer:
                         else:
                             self.patience_counter = state['patience_counter']
                             print(f"Loaded patience_counter: {self.patience_counter}")
-                    if 'ema_loss' in state:
-                        self.ema_loss = state['ema_loss']
+                    # 不从检查点加载ema_loss，而是在_compute_initial_loss_scaling_factors中重新计算
+                    # if 'ema_loss' in state:
+                    #     self.ema_loss = state['ema_loss']
+                    # else:
+                    #     # For checkpoints without ema_loss (older versions), initialize it
+                    #     self.ema_loss = 0
                     else:
                         # For checkpoints without ema_loss (older versions), initialize it
                         self.ema_loss = 0
@@ -808,18 +812,11 @@ class Trainer:
                     
                 # 计算目标损失值（保持总损失不变）
                 target_total_loss = original_total_loss
-                target_main_loss = target_total_loss * target_main_ratio / (
-                    target_main_ratio + target_commitment_ratio + target_codebook_ratio + target_distill_ratio
-                ) if (target_main_ratio + target_commitment_ratio + target_codebook_ratio + target_distill_ratio) > 0 else 0
-                target_commitment_loss = target_total_loss * target_commitment_ratio / (
-                    target_main_ratio + target_commitment_ratio + target_codebook_ratio + target_distill_ratio
-                ) if (target_main_ratio + target_commitment_ratio + target_codebook_ratio + target_distill_ratio) > 0 else 0
-                target_codebook_loss = target_total_loss * target_codebook_ratio / (
-                    target_main_ratio + target_commitment_ratio + target_codebook_ratio + target_distill_ratio
-                ) if (target_main_ratio + target_commitment_ratio + target_codebook_ratio + target_distill_ratio) > 0 else 0
-                target_distill_loss = target_total_loss * target_distill_ratio / (
-                    target_main_ratio + target_commitment_ratio + target_codebook_ratio + target_distill_ratio
-                ) if (target_main_ratio + target_commitment_ratio + target_codebook_ratio + target_distill_ratio) > 0 else 0
+                sum_ratios = target_main_ratio + target_commitment_ratio + target_codebook_ratio + target_distill_ratio
+                target_main_loss = target_total_loss * target_main_ratio / sum_ratios if sum_ratios > 0 else 0
+                target_commitment_loss = target_total_loss * target_commitment_ratio / sum_ratios if sum_ratios > 0 else 0
+                target_codebook_loss = target_total_loss * target_codebook_ratio / sum_ratios if sum_ratios > 0 else 0
+                target_distill_loss = target_total_loss * target_distill_ratio / sum_ratios if sum_ratios > 0 else 0
                     
                 print(f"目标损失值:")
                 print(f"  主CFM损失: {target_main_loss:.6f}")
@@ -830,17 +827,19 @@ class Trainer:
                     
                 # 计算缩放因子
                 self.loss_scaling_factors = {}
-                self.loss_scaling_factors['main'] = target_main_loss / (original_main_loss + 1e-8) if original_main_loss > 0 else 0.0
-                self.loss_scaling_factors['commitment'] = target_commitment_loss / (original_commitment_loss + 1e-8) if original_commitment_loss > 0 else 0.0
-                self.loss_scaling_factors['codebook'] = target_codebook_loss / (original_codebook_loss + 1e-8) if original_codebook_loss > 0 else 0.0
-                self.loss_scaling_factors['distill'] = target_distill_loss / (original_distill_loss_val + 1e-8) if original_distill_loss_val > 0 else 0.0
+                self.loss_scaling_factors['main'] = target_main_loss / original_main_loss if original_main_loss > 0 else 0.0
+                self.loss_scaling_factors['commitment'] = target_commitment_loss / original_commitment_loss if original_commitment_loss > 0 else 0.0
+                self.loss_scaling_factors['codebook'] = target_codebook_loss / original_codebook_loss if original_codebook_loss > 0 else 0.0
+                self.loss_scaling_factors['distill'] = target_distill_loss / original_distill_loss_val if original_distill_loss_val > 0 else 0.0
                     
                 print(f"计算得到的缩放因子:")
                 print(f"  主CFM缩放因子: {self.loss_scaling_factors['main']:.6f}")
                 print(f"  承诺损失缩放因子: {self.loss_scaling_factors['commitment']:.6f}")
                 print(f"  码本损失缩放因子: {self.loss_scaling_factors['codebook']:.6f}")
                 print(f"  蒸馏损失缩放因子: {self.loss_scaling_factors['distill']:.6f}")
-                    
+                
+                # 初始化ema_loss为总原始损失值
+                self.ema_loss = original_total_loss                    
         except Exception as e:
             print(f"计算初始损失缩放因子时出错: {e}")
             # 使用默认缩放因子
@@ -1360,20 +1359,21 @@ class Trainer:
             
             loss, _ = self.model.cfm(x, target_lengths, prompt_len, cond, y)
             
-            # 计算各损失组件（验证时不包含蒸馏损失）
-            commitment_loss_component = (alt_commitment_loss + ori_commitment_loss) * 0.05
-            codebook_loss_component = (ori_codebook_loss + alt_codebook_loss) * 0.15
+            # 在验证时也应用相同的损失缩放因子
+            scaled_main_loss = loss * self.loss_scaling_factors['main']
+            scaled_commitment_loss = (alt_commitment_loss + ori_commitment_loss) * self.loss_scaling_factors['commitment']
+            scaled_codebook_loss = (ori_codebook_loss + alt_codebook_loss) * self.loss_scaling_factors['codebook']
             
             loss_total = (
-                loss +
-                commitment_loss_component +
-                codebook_loss_component
+                scaled_main_loss +
+                scaled_commitment_loss +
+                scaled_codebook_loss
             )
             
             # 打印详细的验证损失组件信息（仅在需要时打印，比如在validate函数中）
             # 这里我们只计算返回值，详细打印在validate函数中处理
             
-            return loss_total.detach().item(), loss.detach().item(), commitment_loss_component.detach().item(), codebook_loss_component.detach().item()
+            return loss_total.detach().item(), scaled_main_loss.detach().item(), scaled_commitment_loss.detach().item(), scaled_codebook_loss.detach().item()
     
     def validate(self):
         """在整个验证集上评估模型"""
