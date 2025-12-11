@@ -857,8 +857,15 @@ class Trainer:
                         else:
                             print(f"Warning: Type mismatch in AR distillation loss - student: {type(loss_ar)}, teacher: {type(teacher_loss_ar)}")
                 loss_total = loss + distill_loss
-                self.ema_loss = loss_total.item()
-
+                # 使用指数移动平均计算ema_loss，与train.py保持一致
+                if not hasattr(self, 'ema_loss'):
+                    self.ema_loss = 0
+                if not hasattr(self, 'loss_smoothing_rate'):
+                    self.loss_smoothing_rate = 0.99
+                self.ema_loss = (
+                    self.ema_loss * self.loss_smoothing_rate + loss_total.item() * (1 - self.loss_smoothing_rate)
+                    if self.iters > 0 else loss_total.item()
+                )
                 self.accelerator.backward(loss_total)
 
                 grad_norm_g = torch.nn.utils.clip_grad_norm_(
@@ -1081,7 +1088,6 @@ def copy_final_models(log_dir, run_name, train_cfm=False, train_ar=False, config
         if os.path.exists(config_file):
             shutil.copy2(config_file, os.path.join(base_log_dir, os.path.basename(config_path)))
             print(f"已将配置文件拷贝到: {os.path.join(base_log_dir, os.path.basename(config_path))}")
-
 def main(args):
     # 如果config参数为空，则使用默认值
     if not args.config:
