@@ -567,6 +567,11 @@ class Trainer:
                 ignore_modules=[],
                 is_distributed=False
             )
+            # 确保教师模型参数完全冻结
+            for key in self.teacher_model:
+                for param in self.teacher_model[key].parameters():
+                    param.requires_grad = False
+            # 确保教师模型始终处于评估模式
             _ = [self.teacher_model[key].eval() for key in self.teacher_model]
             print(f"教师模型加载完成: {teacher_checkpoint}")
         else:
@@ -859,6 +864,8 @@ class Trainer:
         # 如果有教师模型，添加知识蒸馏损失
         distill_loss = torch.tensor(0.0, device=self.device)
         if self.teacher_model is not None and self.use_distill:
+            # 确保教师模型处于评估模式
+            _ = [self.teacher_model[key].eval() for key in self.teacher_model]
             with torch.no_grad():
                 # 使用教师模型生成目标输出
                 teacher_loss, teacher_output = self.teacher_model.cfm(x, target_lengths, prompt_len, cond, y)
@@ -1053,6 +1060,9 @@ class Trainer:
             return None
             
         _ = [self.model[key].eval() for key in self.model]
+        # 如果有教师模型，也确保其处于评估模式
+        if self.teacher_model is not None:
+            _ = [self.teacher_model[key].eval() for key in self.teacher_model]
         total_loss = 0
         total_main_loss = 0
         total_commitment_loss = 0
@@ -1161,6 +1171,9 @@ class Trainer:
         # print_epoch = self.epoch
             
         _ = [self.model[key].train() for key in self.model]
+        # 如果有教师模型，确保其处于评估模式
+        if self.teacher_model is not None:
+            _ = [self.teacher_model[key].eval() for key in self.teacher_model]
         
         firstItersIdx = self.iters % len(self.train_dataloader)
         if firstItersIdx == 0 and self.iters != 0:
