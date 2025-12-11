@@ -172,6 +172,19 @@ class Trainer:
         self.max_epochs = max_epochs
         self.training_completed = False  # 训练完成标志位
         
+        # Initialize models and optimizers
+        self._init_models(train_cfm=train_cfm, train_ar=train_ar)
+
+        # Load checkpoint if available
+        self._load_checkpoint(pretrained_cfm_ckpt_path, pretrained_ar_ckpt_path)
+        
+        # 初始化教师模型（如果启用了知识蒸馏）
+        self.teacher_model = None
+        # 根据新的参数决定是否加载教师模型
+        # 只有在对应模型需要训练且启用了蒸馏时才加载教师模型
+        if (self.use_distill_ar and self.train_ar) or (self.use_distill_cfm and self.train_cfm):
+            self.set_teacher_model()
+    
     def compute_kl_distill_loss(self, student_logits, teacher_logits, temperature=1.0):
         """使用KL散度计算蒸馏损失，支持温度参数"""
         # 避免数值不稳定，添加小的epsilon
@@ -190,19 +203,6 @@ class Trainer:
         
         # 温度系数缩放
         return kl_loss * (temperature ** 2)
-        
-        # Initialize models and optimizers
-        self._init_models(train_cfm=train_cfm, train_ar=train_ar)
-
-        # Load checkpoint if available
-        self._load_checkpoint(pretrained_cfm_ckpt_path, pretrained_ar_ckpt_path)
-        
-        # 初始化教师模型（如果启用了知识蒸馏）
-        self.teacher_model = None
-        # 根据新的参数决定是否加载教师模型
-        # 只有在对应模型需要训练且启用了蒸馏时才加载教师模型
-        if (self.use_distill_ar and self.train_ar) or (self.use_distill_cfm and self.train_cfm):
-            self.set_teacher_model()
 
     def _init_dataloader(self, data_dir, batch_size, num_workers, spect_params, sr):
         self.spect_params = spect_params
