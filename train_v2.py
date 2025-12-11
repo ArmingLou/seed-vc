@@ -561,6 +561,9 @@ class Trainer:
             return None
             
         self.model.eval()
+        # 如果有教师模型，也确保其处于评估模式
+        if self.teacher_model is not None:
+            self.teacher_model.eval()
         total_loss = 0
         total_ar_loss = 0
         total_cfm_loss = 0
@@ -694,6 +697,9 @@ class Trainer:
                 
                 if not init_epoch:
                     self.model.train()
+                    # 如果有教师模型，确保其处于评估模式
+                    if self.teacher_model is not None:
+                        self.teacher_model.eval()
                     init_epoch = True
                 
                 # Process batch with fp16 error handling
@@ -794,6 +800,8 @@ class Trainer:
                 # 如果有教师模型，添加知识蒸馏损失
                 distill_loss = 0
                 if self.teacher_model is not None:
+                    # 确保教师模型处于评估模式
+                    self.teacher_model.eval()
                     with torch.no_grad():
                         # 使用教师模型生成目标输出
                         # 只计算需要蒸馏的模型部分的输出，提高效率
