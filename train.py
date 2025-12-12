@@ -102,9 +102,9 @@ class Trainer:
         # 初始化损失缩放因子
         self.loss_scaling_factors = {
             'main': 1.0,
-            'commitment': 1.0,
-            'codebook': 1.0,
-            'distill': 1.0
+            'commitment': 0.0,
+            'codebook': 0.0,
+            'distill': 0.0
         }
         
         # 按文件名顺序加载数据以确保训练的一致性
@@ -262,6 +262,12 @@ class Trainer:
                     if 'best_train_loss' in state:
                         self.best_train_loss = state['best_train_loss']
                         print(f"Loaded best_train_loss: {self.best_train_loss}")
+                        
+                    # 恢复 loss 缩放因子
+                    if 'loss_scaling_factors' in state:
+                        self.loss_scaling_factors = state['loss_scaling_factors']
+                        print(f"Loaded loss_scaling_factors: {self.loss_scaling_factors}")
+                        
                     # 区分新训练和断点续训练的情况
                     if os.path.basename(latest_checkpoint).startswith("DiT_epoch_"):
                         # warmup_steps始终使用命令行参数
@@ -621,6 +627,19 @@ class Trainer:
         
     def _compute_initial_loss_scaling_factors(self):
         """计算初始损失缩放因子，使各损失组件按指定比例调整"""
+        # 只保存初次计算的值，避免续训练重置缩放因子，也避免被 0 覆盖原有非 0 的值，确保缩放因子即使断点续训练从头到尾保持最早的值，而不是续训练时新计算。
+        commitment_need_comp = False
+        codebook_need_comp = False
+        distill_need_comp = False
+        if self.loss_scaling_factors['commitment'] == 0.0:
+            commitment_need_comp = True
+        if self.loss_scaling_factors['codebook'] == 0.0:
+            codebook_need_comp = True
+        if self.loss_scaling_factors['distill'] == 0.0:
+            distill_need_comp = True
+        else:
+            print("断点续训练恢复，将使用继承的蒸馏权重，忽视参数中 --distill 重新指定的值，只可以关闭蒸馏。")
+            
         print("计算初始损失缩放因子...")
             
         # 临时设置模型为评估模式以计算初始损失
@@ -801,6 +820,7 @@ class Trainer:
                 print(f"  码本损失: {original_codebook_loss:.6f}")
                 print(f"  蒸馏损失: {original_distill_loss_val:.6f}")
                 print(f"  总损失: {original_total_loss:.6f}")
+                
                     
                 # 目标比例 1:0.05:0.15:self.distill_weight
                 # 如果原始损失值为0，则对应的目标比例也应为0
@@ -809,57 +829,70 @@ class Trainer:
                 target_codebook_ratio = 0.0 if original_codebook_loss == 0 else 0.15
                 # 如果distill_weight为0或原始蒸馏损失值为0，则目标蒸馏比例应为0
                 target_distill_ratio = 0.0 if original_distill_loss_val == 0 else self.distill_weight
-                    
+                
+                # target_main_loss = original_main_loss    
                 # 计算目标损失值（保持总损失不变）
-                target_total_loss = original_total_loss
-                sum_ratios = target_main_ratio + target_commitment_ratio + target_codebook_ratio + target_distill_ratio
-                target_main_loss = target_total_loss * target_main_ratio / sum_ratios if sum_ratios > 0 else 0
-                target_commitment_loss = target_total_loss * target_commitment_ratio / sum_ratios if sum_ratios > 0 else 0
-                target_codebook_loss = target_total_loss * target_codebook_ratio / sum_ratios if sum_ratios > 0 else 0
-                target_distill_loss = target_total_loss * target_distill_ratio / sum_ratios if sum_ratios > 0 else 0
+                # target_total_loss = original_total_loss
+                # sum_ratios = target_main_ratio + target_commitment_ratio + target_codebook_ratio + target_distill_ratio
+                # target_main_loss = target_total_loss * target_main_ratio / sum_ratios if sum_ratios > 0 else 0
+                # target_commitment_loss = target_main_loss * target_commitment_ratio 
+                # target_codebook_loss = target_main_loss * target_codebook_ratio
+                # target_distill_loss = target_main_loss * target_distill_ratio
                 
                 # 调整为永远以 main 的因子为 1.0
-                mainScale = target_main_loss / original_main_loss if original_main_loss > 0 else 1.0
-                target_main_loss = original_main_loss
-                target_commitment_loss = target_commitment_loss / mainScale
-                target_codebook_loss = target_codebook_loss / mainScale
-                target_distill_loss = target_distill_loss / mainScale
+                # mainScale = target_main_loss / original_main_loss if original_main_loss > 0 else 1.0
+                # target_main_loss = original_main_loss
+                # target_commitment_loss = target_commitment_loss / mainScale
+                # target_codebook_loss = target_codebook_loss / mainScale
+                # target_distill_loss = target_distill_loss / mainScale
+                # target_total_loss = target_main_loss + \
+                #                     target_commitment_loss + \
+                #                     target_codebook_loss + \
+                #                     target_distill_loss
+                    
+                # 计算缩放因子
+                self.loss_scaling_factors['main'] = 1.0
+                if commitment_need_comp:
+                    self.loss_scaling_factors['commitment'] = original_main_loss * target_commitment_ratio / original_commitment_loss if original_commitment_loss > 0 else 0.0
+                if codebook_need_comp:
+                    self.loss_scaling_factors['codebook'] = original_main_loss * target_codebook_ratio / original_codebook_loss if original_codebook_loss > 0 else 0.0
+                if distill_need_comp:
+                    self.loss_scaling_factors['distill'] = original_main_loss * target_distill_ratio / original_distill_loss_val if original_distill_loss_val > 0 else 0.0
+                    
+                print(f"缩放因子:")
+                print(f"  主CFM缩放因子: {self.loss_scaling_factors['main']:.6f}")
+                print(f"  {'计算的'if commitment_need_comp else '继承的'} 承诺损失缩放因子: {self.loss_scaling_factors['commitment']:.6f}")
+                print(f"  {'计算的'if codebook_need_comp else '继承的'} 码本损失缩放因子: {self.loss_scaling_factors['codebook']:.6f}")
+                print(f"  {'计算的'if distill_need_comp else '继承的'} 蒸馏损失缩放因子: {self.loss_scaling_factors['distill']:.6f}")
+                
+                # 用新计算 或 继承的 缩放因子 重新计算 目标损失值
+                target_main_loss = original_main_loss 
+                target_commitment_loss = original_commitment_loss * self.loss_scaling_factors['commitment'] 
+                target_codebook_loss = original_codebook_loss * self.loss_scaling_factors['codebook']
+                target_distill_loss = original_distill_loss_val * self.loss_scaling_factors['distill']
                 target_total_loss = target_main_loss + \
                                     target_commitment_loss + \
                                     target_codebook_loss + \
                                     target_distill_loss
-                    
+                
                 print(f"目标损失值:")
                 print(f"  主CFM损失: {target_main_loss:.6f}")
                 print(f"  承诺损失: {target_commitment_loss:.6f}")
                 print(f"  码本损失: {target_codebook_loss:.6f}")
                 print(f"  蒸馏损失: {target_distill_loss:.6f}")
                 print(f"  总损失: {target_total_loss:.6f}")
-                    
-                # 计算缩放因子
-                self.loss_scaling_factors = {}
-                self.loss_scaling_factors['main'] = 1.0
-                self.loss_scaling_factors['commitment'] = target_commitment_loss / original_commitment_loss if original_commitment_loss > 0 else 0.0
-                self.loss_scaling_factors['codebook'] = target_codebook_loss / original_codebook_loss if original_codebook_loss > 0 else 0.0
-                self.loss_scaling_factors['distill'] = target_distill_loss / original_distill_loss_val if original_distill_loss_val > 0 else 0.0
-                    
-                print(f"计算得到的缩放因子:")
-                print(f"  主CFM缩放因子: {self.loss_scaling_factors['main']:.6f}")
-                print(f"  承诺损失缩放因子: {self.loss_scaling_factors['commitment']:.6f}")
-                print(f"  码本损失缩放因子: {self.loss_scaling_factors['codebook']:.6f}")
-                print(f"  蒸馏损失缩放因子: {self.loss_scaling_factors['distill']:.6f}")
                 
                 # 初始化ema_loss为总原始损失值
                 self.ema_loss = target_total_loss                    
         except Exception as e:
             print(f"计算初始损失缩放因子时出错: {e}")
             # 使用默认缩放因子
-            self.loss_scaling_factors = {
-                'main': 1.0,
-                'commitment': 0.05,
-                'codebook': 0.15,
-                'distill': self.distill_weight
-            }
+            # self.loss_scaling_factors = {
+            #     'main': 1.0,
+            #     'commitment': 0.0,
+            #     'codebook': 0.0,
+            #     'distill': 0.0
+            # }
             
         # 恢复模型训练模式
         _ = [self.model[key].train() for key in self.model]
@@ -1453,6 +1486,7 @@ class Trainer:
             'ema_loss': self.ema_loss,
             'best_train_loss': self.best_train_loss,
             'current_lr': self.optimizer.optimizers['cfm'].param_groups[0]['lr'],  # 保存当前学习率
+            'loss_scaling_factors': self.loss_scaling_factors,
         }
         os.makedirs(self.log_dir, exist_ok=True)
         save_path = os.path.join(self.log_dir, 'best_model.pth')
@@ -1482,13 +1516,14 @@ class Trainer:
             'ema_loss': self.ema_loss,
             'best_train_loss': self.best_train_loss,
             'current_lr': self.optimizer.optimizers['cfm'].param_groups[0]['lr'],  # 保存当前学习率
+            'loss_scaling_factors': self.loss_scaling_factors,
         }
         save_path = os.path.join(
             self.log_dir,
             f'DiT_epoch_{save_epoch:05d}_step_{self.iters:05d}.pth'
         )
-        torch.save(state, save_path)
         print(f"Checkpoint saved at {save_path}")
+        torch.save(state, save_path)
 
         # find all checkpoints and remove old ones
         checkpoints = glob.glob(os.path.join(self.log_dir, 'DiT_epoch_*.pth'))

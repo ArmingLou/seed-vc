@@ -138,8 +138,8 @@ class Trainer:
         self.loss_scaling_factors = {
             'ar': 1.0,
             'cfm': 1.0,
-            'distill_ar': 1.0,
-            'distill_cfm': 1.0
+            'distill_ar': 0.0,
+            'distill_cfm': 0.0
         }
         
         # 学习率调度相关参数
@@ -214,6 +214,18 @@ class Trainer:
     
     def _compute_initial_loss_scaling_factors(self):
         """计算初始损失缩放因子，使各损失组件按指定比例调整"""
+        # 只保存初次计算的值，避免续训练重置缩放因子，也避免被 0 覆盖原有非 0 的值，确保缩放因子即使断点续训练从头到尾保持最早的值，而不是续训练时新计算。
+        distill_ar_need_comp = False
+        distill_cfm_need_comp = False
+        if self.loss_scaling_factors['distill_cfm'] == 0.0:
+            distill_cfm_need_comp = True
+        else:
+            print("断点续训练恢复，将使用继承的蒸馏权重，忽视参数中 --distill-cfm 重新指定的值，只可以关闭蒸馏。")
+        if self.loss_scaling_factors['distill_ar'] == 0.0:
+            distill_ar_need_comp = True
+        else:
+            print("断点续训练恢复，将使用继承的蒸馏权重，忽视参数中 --distill-ar 重新指定的值，只可以关闭蒸馏。")
+            
         if self.accelerator.is_main_process:
             print("计算初始损失缩放因子...")
             
@@ -331,27 +343,48 @@ class Trainer:
                 
                 # AR模型和CFM模型分别独立计算目标比例
                 # AR模型组：target_ar_ratio 和 target_distill_ar_ratio
-                ar_group_ratio_sum = sum([ratio for ratio in [target_ar_ratio, target_distill_ar_ratio] if ratio > 0])
+                # ar_group_ratio_sum = sum([ratio for ratio in [target_ar_ratio, target_distill_ar_ratio] if ratio > 0])
                 # CFM模型组：target_cfm_ratio 和 target_distill_cfm_ratio
-                cfm_group_ratio_sum = sum([ratio for ratio in [target_cfm_ratio, target_distill_cfm_ratio] if ratio > 0])
+                # cfm_group_ratio_sum = sum([ratio for ratio in [target_cfm_ratio, target_distill_cfm_ratio] if ratio > 0])
                 
                 # 根据各自组内的比例分配目标损失值
-                target_ar_loss = original_total_loss_ar * target_ar_ratio / ar_group_ratio_sum if ar_group_ratio_sum > 0 and target_ar_ratio > 0 else 0
-                target_distill_ar_loss = original_total_loss_ar * target_distill_ar_ratio / ar_group_ratio_sum if ar_group_ratio_sum > 0 and target_distill_ar_ratio > 0 else 0
+                # target_ar_loss = original_total_loss_ar * target_ar_ratio / ar_group_ratio_sum if ar_group_ratio_sum > 0 and target_ar_ratio > 0 else 0
+                # target_distill_ar_loss = original_total_loss_ar * target_distill_ar_ratio / ar_group_ratio_sum if ar_group_ratio_sum > 0 and target_distill_ar_ratio > 0 else 0
                 
-                target_cfm_loss = original_total_loss_cfm * target_cfm_ratio / cfm_group_ratio_sum if cfm_group_ratio_sum > 0 and target_cfm_ratio > 0 else 0
-                target_distill_cfm_loss = original_total_loss_cfm * target_distill_cfm_ratio / cfm_group_ratio_sum if cfm_group_ratio_sum > 0 and target_distill_cfm_ratio > 0 else 0
+                # target_cfm_loss = original_total_loss_cfm * target_cfm_ratio / cfm_group_ratio_sum if cfm_group_ratio_sum > 0 and target_cfm_ratio > 0 else 0
+                # target_distill_cfm_loss = original_total_loss_cfm * target_distill_cfm_ratio / cfm_group_ratio_sum if cfm_group_ratio_sum > 0 and target_distill_cfm_ratio > 0 else 0
+                
                 
                 # 调整为永远以 main 的因子为 1.0
-                arScale = target_ar_loss / original_ar_loss_val if original_ar_loss_val > 0 else 1.0
+                # arScale = target_ar_loss / original_ar_loss_val if original_ar_loss_val > 0 else 1.0
+                # target_ar_loss = original_ar_loss_val
+                # target_distill_ar_loss = target_distill_ar_loss / arScale
+                # cfmScale = target_cfm_loss / original_cfm_loss_val if original_cfm_loss_val > 0 else 1.0
+                # target_cfm_loss = original_cfm_loss_val
+                # target_distill_cfm_loss = target_distill_cfm_loss / cfmScale
+                
+                # 计算缩放因子
+                self.loss_scaling_factors['ar'] = 1.0
+                self.loss_scaling_factors['cfm'] = 1.0
+                if distill_ar_need_comp:
+                    self.loss_scaling_factors['distill_ar'] = target_ar_loss * target_distill_ar_ratio / original_distill_ar_loss  if original_distill_ar_loss > 0 else 0.0
+                if distill_cfm_need_comp:
+                    self.loss_scaling_factors['distill_cfm'] = target_cfm_loss * target_distill_cfm_ratio / original_distill_cfm_loss if original_distill_cfm_loss > 0 else 0.0
+                
+                if self.accelerator.is_main_process:
+                    print(f"缩放因子:")
+                    print(f"  AR损失缩放因子: {self.loss_scaling_factors['ar']:.6f}")
+                    print(f"  CFM损失缩放因子: {self.loss_scaling_factors['cfm']:.6f}")
+                    print(f"  {'计算的' if distill_ar_need_comp else '继承的'} AR蒸馏损失缩放因子: {self.loss_scaling_factors['distill_ar']:.6f}")
+                    print(f"  {'计算的' if distill_cfm_need_comp else '继承的'} CFM蒸馏损失缩放因子: {self.loss_scaling_factors['distill_cfm']:.6f}")
+                    
+                # 用新计算 或 继承的 缩放因子 重新计算 目标损失值
                 target_ar_loss = original_ar_loss_val
-                target_distill_ar_loss = target_distill_ar_loss / arScale
-                cfmScale = target_cfm_loss / original_cfm_loss_val if original_cfm_loss_val > 0 else 1.0
                 target_cfm_loss = original_cfm_loss_val
-                target_distill_cfm_loss = target_distill_cfm_loss / cfmScale
+                target_distill_ar_loss = original_distill_ar_loss * self.loss_scaling_factors['distill_ar']
+                target_distill_cfm_loss = original_distill_cfm_loss * self.loss_scaling_factors['distill_cfm']
                 
                 target_total_loss = target_ar_loss + target_distill_ar_loss + target_cfm_loss + target_distill_cfm_loss
-                
                 
                 if self.accelerator.is_main_process:
                     print(f"目标损失值:")
@@ -361,20 +394,6 @@ class Trainer:
                     print(f"  CFM蒸馏损失: {target_distill_cfm_loss:.6f}")
                     print(f"  总损失: {target_total_loss:.6f}")
                 
-                # 计算缩放因子
-                self.loss_scaling_factors = {}
-                self.loss_scaling_factors['ar'] = 1.0
-                self.loss_scaling_factors['cfm'] = 1.0
-                self.loss_scaling_factors['distill_ar'] = target_distill_ar_loss / original_distill_ar_loss  if original_distill_ar_loss > 0 else 0.0
-                self.loss_scaling_factors['distill_cfm'] = target_distill_cfm_loss / original_distill_cfm_loss if original_distill_cfm_loss > 0 else 0.0
-                
-                if self.accelerator.is_main_process:
-                    print(f"计算得到的缩放因子:")
-                    print(f"  AR损失缩放因子: {self.loss_scaling_factors['ar']:.6f}")
-                    print(f"  CFM损失缩放因子: {self.loss_scaling_factors['cfm']:.6f}")
-                    print(f"  AR蒸馏损失缩放因子: {self.loss_scaling_factors['distill_ar']:.6f}")
-                    print(f"  CFM蒸馏损失缩放因子: {self.loss_scaling_factors['distill_cfm']:.6f}")
-                
                 # 初始化ema_loss为总原始损失值
                 if self.accelerator.is_main_process:
                     self.ema_loss = target_total_loss
@@ -383,12 +402,12 @@ class Trainer:
             if self.accelerator.is_main_process:                
                 print(f"计算初始损失缩放因子时出错: {e}")
             # 使用默认缩放因子
-            self.loss_scaling_factors = {
-                'ar': 1.0,
-                'cfm': 1.0,
-                'distill_ar': self.distill_ar_weight ,
-                'distill_cfm': self.distill_cfm_weight
-            }
+            # self.loss_scaling_factors = {
+            #     'ar': 1.0,
+            #     'cfm': 1.0,
+            #     'distill_ar': 0.0,
+            #     'distill_cfm': 0.0
+            # }
         
         # 恢复模型训练模式
         self.model.train()
@@ -574,6 +593,12 @@ class Trainer:
                     if 'best_val_loss' in state:
                         self.best_val_loss = state['best_val_loss']
                         print(f"Loaded best_val_loss: {self.best_val_loss}")
+                        
+                    # 恢复 loss 缩放因子
+                    if 'loss_scaling_factors' in state:
+                        self.loss_scaling_factors = state['loss_scaling_factors']
+                        print(f"Loaded loss_scaling_factors: {self.loss_scaling_factors}")
+                        
                     if 'patience_counter' in state:
                         if self.resume_lr > 0.0:
                             #强制设置 恢复学习率时， 也强制重置 早停耐心计数器。
@@ -857,6 +882,7 @@ class Trainer:
             'switched_to_val_scheduler': self.switched_to_val_scheduler,
             'scheduler': self.scheduler.state_dict(),
             'current_lr': self.optimizer.param_groups[0]['lr'],  # 保存当前学习率
+            'loss_scaling_factors': self.loss_scaling_factors,
         }
         
         # 根据训练参数决定保存哪些模型
@@ -1279,6 +1305,7 @@ class Trainer:
             'switched_to_val_scheduler': self.switched_to_val_scheduler,
             'scheduler': self.scheduler.state_dict(),
             'current_lr': self.optimizer.param_groups[0]['lr'],  # 保存当前学习率
+            'loss_scaling_factors': self.loss_scaling_factors,
         }
         
         if self.train_ar:
