@@ -281,7 +281,7 @@ class Trainer:
                         mel_lens.to(self.device),
                         forward_ar=teacher_forward_ar,
                         forward_cfm=teacher_forward_cfm,
-                )
+                    )
                     
                     # 计算学生模型和教师模型输出之间的蒸馏损失
                     # 只有在对应模型被训练且启用了蒸馏时才计算蒸馏损失
