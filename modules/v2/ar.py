@@ -336,7 +336,7 @@ class NaiveWrapper(nn.Module):
     def setup_caches(self, max_batch_size: int, max_seq_len: int, dtype: torch.dtype = torch.bfloat16, device: torch.device = "cuda"):
         self.model.setup_caches(max_batch_size, max_seq_len, dtype, device)
 
-    def forward(self, cond: Tensor, cond_lens: Tensor, x: Tensor, x_lens: Tensor) -> torch.Tensor:
+    def forward(self, cond: Tensor, cond_lens: Tensor, x: Tensor, x_lens: Tensor):
         # style_emb = self.style_in(style).unsqueeze(1)  #  [B, 1, D]
         sep_token_emb = self.sep_token_emb.expand(x.size(0), 1, -1)
         _, x_emb = self.model.embed_base(x, x_lens)
@@ -360,7 +360,8 @@ class NaiveWrapper(nn.Module):
             input_pos[i, cond_lens[i] + 1: cond_lens[i] + x_lens[i] + 2] = torch.arange(x_lens[i] + 1, device=emb_seq.device)
         out = self.model(emb_seq, cond_lens, x, x_lens, input_pos=input_pos)
         loss = F.cross_entropy(out.token_logits.transpose(1, 2), out.token_targets.long(), ignore_index=-100)
-        return loss
+        # 返回损失值和logits，用于知识蒸馏
+        return loss, out.token_logits
 
     @torch.no_grad()
     def infer(self, cond: Tensor) -> torch.Tensor:

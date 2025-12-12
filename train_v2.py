@@ -199,35 +199,12 @@ class Trainer:
     
     def compute_kl_distill_loss(self, student_logits, teacher_logits, temperature=1.0):
         """使用KL散度计算蒸馏损失，支持温度参数"""
-        # 添加调试信息
-        if self.accelerator.is_main_process:
-            print(f"Debug: student_logits shape: {student_logits.shape}, teacher_logits shape: {teacher_logits.shape}")
-            print(f"Debug: student_logits mean: {student_logits.mean()}, teacher_logits mean: {teacher_logits.mean()}")
-            print(f"Debug: student_logits std: {student_logits.std()}, teacher_logits std: {teacher_logits.std()}")
-            print(f"Debug: temperature: {temperature}")
-        
-        # 检查是否有NaN或无穷大值
-        if torch.isnan(student_logits).any() or torch.isnan(teacher_logits).any():
-            if self.accelerator.is_main_process:
-                print("Warning: NaN values detected in logits")
-            return torch.tensor(0.0, device=student_logits.device)
-        
-        if torch.isinf(student_logits).any() or torch.isinf(teacher_logits).any():
-            if self.accelerator.is_main_process:
-                print("Warning: Inf values detected in logits")
-            return torch.tensor(0.0, device=student_logits.device)
-        
         # 避免数值不稳定，添加小的epsilon
         epsilon = 1e-7
         
         # 软化分布
         student_probs = F.softmax(student_logits / temperature, dim=-1)
         teacher_probs = F.softmax(teacher_logits / temperature, dim=-1)
-        
-        # 添加调试信息
-        if self.accelerator.is_main_process:
-            print(f"Debug: student_probs mean: {student_probs.mean()}, teacher_probs mean: {teacher_probs.mean()}")
-            print(f"Debug: student_probs std: {student_probs.std()}, teacher_probs std: {teacher_probs.std()}")
         
         # 添加epsilon防止log(0)
         student_probs = torch.clamp(student_probs, epsilon, 1.0 - epsilon)
@@ -236,15 +213,8 @@ class Trainer:
         # 计算KL散度
         kl_loss = F.kl_div(torch.log(student_probs), teacher_probs, reduction='batchmean')
         
-        # 添加调试信息
-        if self.accelerator.is_main_process:
-            print(f"Debug: kl_loss: {kl_loss.item()}")
-        
         # 温度系数缩放
-        result = kl_loss * (temperature ** 2)
-        if self.accelerator.is_main_process:
-            print(f"Debug: final result: {result.item()}")
-        return result
+        return kl_loss * (temperature ** 2)
     
     def _compute_initial_loss_scaling_factors(self):
         """计算初始损失缩放因子，使各损失组件按指定比例调整"""
@@ -282,7 +252,7 @@ class Trainer:
                 wave_lengths_16k = (wave_lens.float() * 16000 / self.sr).long()
                 
                 # 计算各损失组件的原始值
-                original_loss_ar, original_loss_cfm = self.model(
+                (original_loss_ar, original_logits_ar), (original_loss_cfm, original_logits_cfm) = self.model(
                     waves_16k.to(self.device),
                     mels.to(self.device),
                     wave_lengths_16k.to(self.device),
@@ -305,7 +275,7 @@ class Trainer:
                     teacher_forward_ar = self.train_ar and self.use_distill_ar
                     teacher_forward_cfm = self.train_cfm and self.use_distill_cfm
                     
-                    teacher_loss_ar, teacher_loss_cfm = self.teacher_model(
+                    (teacher_loss_ar, teacher_logits_ar), (teacher_loss_cfm, teacher_logits_cfm) = self.teacher_model(
                         waves_16k.to(self.device),
                         mels.to(self.device),
                         wave_lengths_16k.to(self.device),
@@ -319,46 +289,46 @@ class Trainer:
                     if self.train_cfm and self.use_distill_cfm:
                         print("Calculating CFM distillation loss...")
                         # CFM蒸馏损失
-                        # 确保loss_cfm和teacher_loss_cfm都是张量且形状匹配
-                        if isinstance(original_loss_cfm, torch.Tensor) and isinstance(teacher_loss_cfm, torch.Tensor):
-                            if original_loss_cfm.size() == teacher_loss_cfm.size():
+                        # 确保logits_cfm和teacher_logits_cfm都是张量且形状匹配
+                        if isinstance(original_logits_cfm, torch.Tensor) and isinstance(teacher_logits_cfm, torch.Tensor):
+                            if original_logits_cfm.size() == teacher_logits_cfm.size():
                                 # 确保数据类型一致
-                                if original_loss_cfm.dtype != teacher_loss_cfm.dtype:
+                                if original_logits_cfm.dtype != teacher_logits_cfm.dtype:
                                     if self.accelerator.is_main_process:
-                                        print(f"警告: CFM蒸馏损失数据类型不一致 - student: {original_loss_cfm.dtype}, teacher: {teacher_loss_cfm.dtype}")
-                                    teacher_loss_cfm = teacher_loss_cfm.to(original_loss_cfm.dtype)
+                                        print(f"警告: CFM蒸馏logits数据类型不一致 - student: {original_logits_cfm.dtype}, teacher: {teacher_logits_cfm.dtype}")
+                                    teacher_logits_cfm = teacher_logits_cfm.to(original_logits_cfm.dtype)
                                 # 使用KL散度计算蒸馏损失，添加温度参数支持
-                                kl_loss = self.compute_kl_distill_loss(original_loss_cfm, teacher_loss_cfm.detach(), temperature=self.distill_temperature)
+                                kl_loss = self.compute_kl_distill_loss(original_logits_cfm, teacher_logits_cfm.detach(), temperature=self.distill_temperature)
                                 original_distill_cfm_loss = kl_loss.item()
                             else:
                                 if self.accelerator.is_main_process:
-                                    print(f"Warning: Shape mismatch in CFM distillation loss - student: {original_loss_cfm.size()}, teacher: {teacher_loss_cfm.size()}")
+                                    print(f"Warning: Shape mismatch in CFM distillation loss - student: {original_logits_cfm.size()}, teacher: {teacher_logits_cfm.size()}")
                         else:
                             if self.accelerator.is_main_process:
-                                print(f"Warning: Type mismatch in CFM distillation loss - student: {type(original_loss_cfm)}, teacher: {type(teacher_loss_cfm)}")
+                                print(f"Warning: Type mismatch in CFM distillation loss - student: {type(original_logits_cfm)}, teacher: {type(teacher_logits_cfm)}")
                     if self.train_ar and self.use_distill_ar:
                         print("Calculating AR distillation loss...")
                         # AR蒸馏损失
-                        # 确保loss_ar和teacher_loss_ar都是张量且形状匹配
-                        if isinstance(original_loss_ar, torch.Tensor) and isinstance(teacher_loss_ar, torch.Tensor):
-                            if original_loss_ar.size() == teacher_loss_ar.size():
+                        # 确保logits_ar和teacher_logits_ar都是张量且形状匹配
+                        if isinstance(original_logits_ar, torch.Tensor) and isinstance(teacher_logits_ar, torch.Tensor):
+                            if original_logits_ar.size() == teacher_logits_ar.size():
                                 print("2 Calculating AR distillation loss...")
                                 # 确保数据类型一致
-                                if original_loss_ar.dtype != teacher_loss_ar.dtype:
+                                if original_logits_ar.dtype != teacher_logits_ar.dtype:
                                     if self.accelerator.is_main_process:
-                                        print(f"警告: AR蒸馏损失数据类型不一致 - student: {original_loss_ar.dtype}, teacher: {teacher_loss_ar.dtype}")
-                                    teacher_loss_ar = teacher_loss_ar.to(original_loss_ar.dtype)
+                                        print(f"警告: AR蒸馏logits数据类型不一致 - student: {original_logits_ar.dtype}, teacher: {teacher_logits_ar.dtype}")
+                                    teacher_logits_ar = teacher_logits_ar.to(original_logits_ar.dtype)
                                 # 使用KL散度计算蒸馏损失，添加温度参数支持
-                                kl_loss = self.compute_kl_distill_loss(original_loss_ar, teacher_loss_ar.detach(), temperature=self.distill_temperature)
+                                kl_loss = self.compute_kl_distill_loss(original_logits_ar, teacher_logits_ar.detach(), temperature=self.distill_temperature)
                                 original_distill_ar_loss = kl_loss.item()
                             else:
                                 print("3 Calculating AR distillation loss...")
                                 if self.accelerator.is_main_process:
-                                    print(f"Warning: Shape mismatch in AR distillation loss - student: {original_loss_ar.size()}, teacher: {teacher_loss_ar.size()}")
+                                    print(f"Warning: Shape mismatch in AR distillation loss - student: {original_logits_ar.size()}, teacher: {teacher_logits_ar.size()}")
                         else:
                             print("4 Calculating AR distillation loss...")
                             if self.accelerator.is_main_process:
-                                print(f"Warning: Type mismatch in AR distillation loss - student: {type(original_loss_ar)}, teacher: {type(teacher_loss_ar)}")
+                                print(f"Warning: Type mismatch in AR distillation loss - student: {type(original_logits_ar)}, teacher: {type(teacher_logits_ar)}")
                 
                 
                 # 计算总原始损失
@@ -1129,7 +1099,7 @@ class Trainer:
                 autocast_context = nullcontext()
             
             with autocast_context:
-                loss_ar, loss_cfm = self.model(
+                (loss_ar, logits_ar), (loss_cfm, logits_cfm) = self.model(
                     waves_16k.to(self.device),
                     mels.to(self.device),
                     wave_lengths_16k.to(self.device),
@@ -1169,7 +1139,7 @@ class Trainer:
                         teacher_forward_ar = self.train_ar and self.use_distill_ar
                         teacher_forward_cfm = self.train_cfm and self.use_distill_cfm
                         
-                        teacher_loss_ar, teacher_loss_cfm = self.teacher_model(
+                        (teacher_loss_ar, teacher_logits_ar), (teacher_loss_cfm, teacher_logits_cfm) = self.teacher_model(
                             waves_16k.to(self.device),
                             mels.to(self.device),
                             wave_lengths_16k.to(self.device),
@@ -1182,40 +1152,40 @@ class Trainer:
                     # 只有在对应模型被训练且启用了蒸馏时才计算蒸馏损失
                     if self.train_cfm and self.use_distill_cfm:
                         # CFM蒸馏损失
-                        # 确保loss_cfm和teacher_loss_cfm都是张量且形状匹配
-                        if isinstance(loss_cfm, torch.Tensor) and isinstance(teacher_loss_cfm, torch.Tensor):
-                            if loss_cfm.size() == teacher_loss_cfm.size():
+                        # 确保logits_cfm和teacher_logits_cfm都是张量且形状匹配
+                        if isinstance(logits_cfm, torch.Tensor) and isinstance(teacher_logits_cfm, torch.Tensor):
+                            if logits_cfm.size() == teacher_logits_cfm.size():
                                 # 确保数据类型一致
-                                if loss_cfm.dtype != teacher_loss_cfm.dtype:
-                                    print(f"警告: CFM蒸馏损失数据类型不一致 - student: {loss_cfm.dtype}, teacher: {teacher_loss_cfm.dtype}")
-                                    teacher_loss_cfm = teacher_loss_cfm.to(loss_cfm.dtype)
+                                if logits_cfm.dtype != teacher_logits_cfm.dtype:
+                                    print(f"警告: CFM蒸馏logits数据类型不一致 - student: {logits_cfm.dtype}, teacher: {teacher_logits_cfm.dtype}")
+                                    teacher_logits_cfm = teacher_logits_cfm.to(logits_cfm.dtype)
                                 # 使用KL散度计算蒸馏损失，添加温度参数支持
-                                kl_loss = self.compute_kl_distill_loss(loss_cfm, teacher_loss_cfm.detach(), temperature=self.distill_temperature)
+                                kl_loss = self.compute_kl_distill_loss(logits_cfm, teacher_logits_cfm.detach(), temperature=self.distill_temperature)
                                 # 应用损失缩放因子和权重
                                 scaled_distill_cfm_loss = kl_loss * self.loss_scaling_factors['distill_cfm']
                                 distill_loss += scaled_distill_cfm_loss
                             else:
-                                print(f"Warning: Shape mismatch in CFM distillation loss - student: {loss_cfm.size()}, teacher: {teacher_loss_cfm.size()}")
+                                print(f"Warning: Shape mismatch in CFM distillation loss - student: {logits_cfm.size()}, teacher: {teacher_logits_cfm.size()}")
                         else:
-                            print(f"Warning: Type mismatch in CFM distillation loss - student: {type(loss_cfm)}, teacher: {type(teacher_loss_cfm)}")
+                            print(f"Warning: Type mismatch in CFM distillation loss - student: {type(logits_cfm)}, teacher: {type(teacher_logits_cfm)}")
                     if self.train_ar and self.use_distill_ar:
                         # AR蒸馏损失
-                        # 确保loss_ar和teacher_loss_ar都是张量且形状匹配
-                        if isinstance(loss_ar, torch.Tensor) and isinstance(teacher_loss_ar, torch.Tensor):
-                            if loss_ar.size() == teacher_loss_ar.size():
+                        # 确保logits_ar和teacher_logits_ar都是张量且形状匹配
+                        if isinstance(logits_ar, torch.Tensor) and isinstance(teacher_logits_ar, torch.Tensor):
+                            if logits_ar.size() == teacher_logits_ar.size():
                                 # 确保数据类型一致
-                                if loss_ar.dtype != teacher_loss_ar.dtype:
-                                    print(f"警告: AR蒸馏损失数据类型不一致 - student: {loss_ar.dtype}, teacher: {teacher_loss_ar.dtype}")
-                                    teacher_loss_ar = teacher_loss_ar.to(loss_ar.dtype)
+                                if logits_ar.dtype != teacher_logits_ar.dtype:
+                                    print(f"警告: AR蒸馏logits数据类型不一致 - student: {logits_ar.dtype}, teacher: {teacher_logits_ar.dtype}")
+                                    teacher_logits_ar = teacher_logits_ar.to(logits_ar.dtype)
                                 # 使用KL散度计算蒸馏损失，添加温度参数支持
-                                kl_loss = self.compute_kl_distill_loss(loss_ar, teacher_loss_ar.detach(), temperature=self.distill_temperature)
+                                kl_loss = self.compute_kl_distill_loss(logits_ar, teacher_logits_ar.detach(), temperature=self.distill_temperature)
                                 # 应用损失缩放因子和权重
                                 scaled_distill_ar_loss = kl_loss * self.loss_scaling_factors['distill_ar']
                                 distill_loss += scaled_distill_ar_loss
                             else:
-                                print(f"Warning: Shape mismatch in AR distillation loss - student: {loss_ar.size()}, teacher: {teacher_loss_ar.size()}")
+                                print(f"Warning: Shape mismatch in AR distillation loss - student: {logits_ar.size()}, teacher: {teacher_logits_ar.size()}")
                         else:
-                            print(f"Warning: Type mismatch in AR distillation loss - student: {type(loss_ar)}, teacher: {type(teacher_loss_ar)}")
+                            print(f"Warning: Type mismatch in AR distillation loss - student: {type(logits_ar)}, teacher: {type(teacher_logits_ar)}")
                 loss_total = loss + distill_loss
                 # 使用指数移动平均计算ema_loss，与train.py保持一致
                 if not hasattr(self, 'ema_loss'):
