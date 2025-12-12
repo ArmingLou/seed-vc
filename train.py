@@ -242,11 +242,8 @@ class Trainer:
                             self.patience_counter = state['patience_counter']
                             print(f"Loaded patience_counter: {self.patience_counter}")
                     # 不从检查点加载ema_loss，而是在_compute_initial_loss_scaling_factors中重新计算
-                    # if 'ema_loss' in state:
-                    #     self.ema_loss = state['ema_loss']
-                    # else:
-                    #     # For checkpoints without ema_loss (older versions), initialize it
-                    #     self.ema_loss = 0
+                    if 'ema_loss' in state:
+                        self.ema_loss = state['ema_loss']
                     else:
                         # For checkpoints without ema_loss (older versions), initialize it
                         self.ema_loss = 0
@@ -882,8 +879,9 @@ class Trainer:
                 print(f"  蒸馏损失: {target_distill_loss:.6f}")
                 print(f"  总损失: {target_total_loss:.6f}")
                 
-                # 初始化ema_loss为总原始损失值
-                self.ema_loss = target_total_loss                    
+                if self.ema_loss is None or self.ema_loss == 0:
+                    # 初始化ema_loss为总原始损失值. 如果断点续训练，就从断点续训练里面读取
+                    self.ema_loss = target_total_loss                    
         except Exception as e:
             print(f"计算初始损失缩放因子时出错: {e}")
             # 使用默认缩放因子

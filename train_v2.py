@@ -396,7 +396,8 @@ class Trainer:
                 
                 # 初始化ema_loss为总原始损失值
                 if self.accelerator.is_main_process:
-                    self.ema_loss = target_total_loss
+                    if self.ema_loss is None or self.ema_loss == 0:
+                        self.ema_loss = target_total_loss
                     
         except Exception as e:
             if self.accelerator.is_main_process:                
@@ -557,18 +558,6 @@ class Trainer:
         checkpoint_path = cfm_checkpoint_path if cfm_checkpoint_path else ar_checkpoint_path
         
         with self.accelerator.main_process_first():
-            if cfm_checkpoint_path:
-                print(f"Loading CFM checkpoint from {cfm_checkpoint_path}")
-            if ar_checkpoint_path:
-                print(f"Loading AR checkpoint from {ar_checkpoint_path}")
-            
-            # 加载模型检查点，只传递需要的检查点路径，并传递train_cfm和train_ar参数
-            self.model.load_checkpoints(
-                cfm_checkpoint_path=cfm_checkpoint_path if self.train_cfm else None, 
-                ar_checkpoint_path=ar_checkpoint_path if self.train_ar else None,
-                train_cfm=self.train_cfm,
-                train_ar=self.train_ar
-            )
             
             # 只有在checkpoint_type为"local"的情况下才从检查点恢复状态，其他情况都视为首次训练
             is_local_checkpoint = (checkpoint_type == "local")
@@ -582,6 +571,17 @@ class Trainer:
                 try:
                     # 加载检查点状态
                     state = torch.load(checkpoint_to_load, map_location="cpu")
+                    
+                    if 'train_cfm' in state and 'train_ar' in state and self.train_cfm == state['train_cfm'] and self.train_ar == state['train_ar']:
+                        print("Checked train_cfm and train_ar from checkpoint state")
+                    else:
+                        print("Warning: train_cfm and train_ar not match in checkpoint state. will not load from checkpoint")
+                        if self.train_cfm:
+                            cfm_checkpoint_path = pretrained_cfm_ckpt_path
+                        if self.train_ar:
+                            ar_checkpoint_path = pretrained_ar_ckpt_path
+                        checkpoint_type = "pretrained"
+                        raise Exception("train_cfm and train_ar not match in checkpoint state")
                     
                     # 恢复训练状态
                     if 'iters' in state:
@@ -607,6 +607,9 @@ class Trainer:
                         else:
                             self.patience_counter = state['patience_counter']
                             print(f"Loaded patience_counter: {self.patience_counter}")
+                            
+                    if 'ema_loss' in state:
+                        self.ema_loss = state['ema_loss']
                     
                     # 恢复学习率相关状态
                     if 'best_train_loss' in state:
@@ -662,6 +665,7 @@ class Trainer:
                             print(f"Set optimizer learning rate to {checkpoint_lr:.2e}")
                 except Exception as e:
                     print(f"Warning: Could not load training state from checkpoint: {e}")
+                    print(f"Loaded teacher/pretrained checkpoint, starting from scratch")
                     # 重置状态
                     self.iters = 0
                     self.epoch = 0
@@ -678,8 +682,21 @@ class Trainer:
                 self.patience_counter = 0
                 self.best_train_loss = float('inf')
                 self.switched_to_val_scheduler = False
-                print(f"Teacher/pretrained model loaded, starting from epoch {self.epoch}, step {self.iters}")
-        
+            
+            if cfm_checkpoint_path:
+                print(f"Loading CFM checkpoint from {cfm_checkpoint_path}")
+            if ar_checkpoint_path:
+                print(f"Loading AR checkpoint from {ar_checkpoint_path}")
+            
+            # 加载模型检查点，只传递需要的检查点路径，并传递train_cfm和train_ar参数
+            self.model.load_checkpoints(
+                cfm_checkpoint_path=cfm_checkpoint_path if self.train_cfm else None, 
+                ar_checkpoint_path=ar_checkpoint_path if self.train_ar else None,
+                train_cfm=self.train_cfm,
+                train_ar=self.train_ar
+            )
+            print(f"Starting from epoch {self.epoch}, step {self.iters}")
+            
         # 准备模型用于分布式训练
         self.model = self.accelerator.prepare(self.model)
 
@@ -878,6 +895,9 @@ class Trainer:
             'epoch': self.epoch,
             'best_val_loss': self.best_val_loss,
             'patience_counter': self.patience_counter,
+            'ema_loss': self.ema_loss,
+            'train_ar': self.train_ar,
+            'train_cfm': self.train_cfm,
             'best_train_loss': self.best_train_loss,
             'switched_to_val_scheduler': self.switched_to_val_scheduler,
             'scheduler': self.scheduler.state_dict(),
@@ -1131,7 +1151,7 @@ class Trainer:
                                 kl_loss = self.compute_kl_distill_loss(loss_cfm, teacher_loss_cfm.detach(), temperature=self.distill_temperature)
                                 # 应用损失缩放因子和权重
                                 scaled_distill_cfm_loss = kl_loss * self.loss_scaling_factors['distill_cfm']
-                                distill_loss += scaled_distill_cfm_loss * self.distill_cfm_weight
+                                distill_loss += scaled_distill_cfm_loss
                             else:
                                 print(f"Warning: Shape mismatch in CFM distillation loss - student: {loss_cfm.size()}, teacher: {teacher_loss_cfm.size()}")
                         else:
@@ -1149,7 +1169,7 @@ class Trainer:
                                 kl_loss = self.compute_kl_distill_loss(loss_ar, teacher_loss_ar.detach(), temperature=self.distill_temperature)
                                 # 应用损失缩放因子和权重
                                 scaled_distill_ar_loss = kl_loss * self.loss_scaling_factors['distill_ar']
-                                distill_loss += scaled_distill_ar_loss * self.distill_ar_weight
+                                distill_loss += scaled_distill_ar_loss
                             else:
                                 print(f"Warning: Shape mismatch in AR distillation loss - student: {loss_ar.size()}, teacher: {teacher_loss_ar.size()}")
                         else:
@@ -1301,6 +1321,9 @@ class Trainer:
             'epoch': save_epoch,
             'best_val_loss': self.best_val_loss,
             'patience_counter': self.patience_counter,
+            'ema_loss': self.ema_loss,
+            'train_ar': self.train_ar,
+            'train_cfm': self.train_cfm,
             'best_train_loss': self.best_train_loss,
             'switched_to_val_scheduler': self.switched_to_val_scheduler,
             'scheduler': self.scheduler.state_dict(),
