@@ -1332,6 +1332,8 @@ class Trainer:
         }
         
         if self.train_ar:
+            # Find all checkpoints and remove old ones
+            self._remove_old_checkpoints("AR_epoch_*_step_*.pth", max_keep=1)
             state = {
                 'net': {
                     'ar': self.accelerator.unwrap_model(self.model).ar.state_dict(),
@@ -1342,10 +1344,9 @@ class Trainer:
             save_path = os.path.join(self.log_dir, 'AR_epoch_%05d_step_%05d.pth' % (save_epoch, self.iters))
             torch.save(state, save_path)
             print(f"Saved AR checkpoint to {save_path}")
-
-            # Find all checkpoints and remove old ones
-            self._remove_old_checkpoints("AR_epoch_*_step_*.pth", max_keep=2)
         if self.train_cfm:
+             # Find all checkpoints and remove old ones
+            self._remove_old_checkpoints("CFM_epoch_*_step_*.pth", max_keep=1)
             state = {
                 'net': {
                     'cfm': self.accelerator.unwrap_model(self.model).cfm.state_dict(),
@@ -1356,9 +1357,7 @@ class Trainer:
             save_path = os.path.join(self.log_dir, 'CFM_epoch_%05d_step_%05d.pth' % (save_epoch, self.iters))
             torch.save(state, save_path)
             print(f"Saved CFM checkpoint to {save_path}")
-
-            # Find all checkpoints and remove old ones
-            self._remove_old_checkpoints("CFM_epoch_*_step_*.pth", max_keep=2)
+           
             
     def _remove_old_checkpoints(self, name_pattern, max_keep=1):
         """Remove old checkpoints"""
