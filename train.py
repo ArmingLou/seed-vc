@@ -1671,6 +1671,8 @@ class Trainer:
         # 计算初始损失缩放因子
         self._compute_initial_loss_scaling_factors()
         
+        print(f"Start training with loss: {self.ema_loss}")
+        
         # Ensure deterministic behavior by setting seeds based on current state
         seed = 1234 + self.iters
         random.seed(seed)

@@ -942,10 +942,12 @@ class Trainer:
         
         print(f"Starting training from epoch {self.epoch}, step {self.iters} At {datetime.datetime.now()}")
         
-        # 在训练开始前计算初始损失缩放因子（如果启用了蒸馏）
-        if (self.use_distill_ar or self.use_distill_cfm) and \
-           ((self.train_ar and self.use_distill_ar) or (self.train_cfm and self.use_distill_cfm)):
-            self._compute_initial_loss_scaling_factors()
+        # # 在训练开始前计算初始损失缩放因子（如果启用了蒸馏）
+        # if (self.use_distill_ar or self.use_distill_cfm) and \
+        #    ((self.train_ar and self.use_distill_ar) or (self.train_cfm and self.use_distill_cfm)):
+        self._compute_initial_loss_scaling_factors()
+        
+        print(f"Start training with loss: {self.ema_loss}")
         
         for epoch in range(self.max_epochs):
             epoch_start_time = time.time()
