@@ -312,6 +312,7 @@ class Trainer:
                         # 确保loss_ar和teacher_loss_ar都是张量且形状匹配
                         if isinstance(original_loss_ar, torch.Tensor) and isinstance(teacher_loss_ar, torch.Tensor):
                             if original_loss_ar.size() == teacher_loss_ar.size():
+                                print("2 Calculating AR distillation loss...")
                                 # 确保数据类型一致
                                 if original_loss_ar.dtype != teacher_loss_ar.dtype:
                                     if self.accelerator.is_main_process:
@@ -321,9 +322,11 @@ class Trainer:
                                 kl_loss = self.compute_kl_distill_loss(original_loss_ar, teacher_loss_ar.detach(), temperature=self.distill_temperature)
                                 original_distill_ar_loss = kl_loss.item()
                             else:
+                                print("3 Calculating AR distillation loss...")
                                 if self.accelerator.is_main_process:
                                     print(f"Warning: Shape mismatch in AR distillation loss - student: {original_loss_ar.size()}, teacher: {teacher_loss_ar.size()}")
                         else:
+                            print("4 Calculating AR distillation loss...")
                             if self.accelerator.is_main_process:
                                 print(f"Warning: Type mismatch in AR distillation loss - student: {type(original_loss_ar)}, teacher: {type(teacher_loss_ar)}")
                 
