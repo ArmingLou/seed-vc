@@ -199,12 +199,35 @@ class Trainer:
     
     def compute_kl_distill_loss(self, student_logits, teacher_logits, temperature=1.0):
         """使用KL散度计算蒸馏损失，支持温度参数"""
+        # 添加调试信息
+        if self.accelerator.is_main_process:
+            print(f"Debug: student_logits shape: {student_logits.shape}, teacher_logits shape: {teacher_logits.shape}")
+            print(f"Debug: student_logits mean: {student_logits.mean()}, teacher_logits mean: {teacher_logits.mean()}")
+            print(f"Debug: student_logits std: {student_logits.std()}, teacher_logits std: {teacher_logits.std()}")
+            print(f"Debug: temperature: {temperature}")
+        
+        # 检查是否有NaN或无穷大值
+        if torch.isnan(student_logits).any() or torch.isnan(teacher_logits).any():
+            if self.accelerator.is_main_process:
+                print("Warning: NaN values detected in logits")
+            return torch.tensor(0.0, device=student_logits.device)
+        
+        if torch.isinf(student_logits).any() or torch.isinf(teacher_logits).any():
+            if self.accelerator.is_main_process:
+                print("Warning: Inf values detected in logits")
+            return torch.tensor(0.0, device=student_logits.device)
+        
         # 避免数值不稳定，添加小的epsilon
         epsilon = 1e-7
         
         # 软化分布
         student_probs = F.softmax(student_logits / temperature, dim=-1)
         teacher_probs = F.softmax(teacher_logits / temperature, dim=-1)
+        
+        # 添加调试信息
+        if self.accelerator.is_main_process:
+            print(f"Debug: student_probs mean: {student_probs.mean()}, teacher_probs mean: {teacher_probs.mean()}")
+            print(f"Debug: student_probs std: {student_probs.std()}, teacher_probs std: {teacher_probs.std()}")
         
         # 添加epsilon防止log(0)
         student_probs = torch.clamp(student_probs, epsilon, 1.0 - epsilon)
@@ -213,8 +236,15 @@ class Trainer:
         # 计算KL散度
         kl_loss = F.kl_div(torch.log(student_probs), teacher_probs, reduction='batchmean')
         
+        # 添加调试信息
+        if self.accelerator.is_main_process:
+            print(f"Debug: kl_loss: {kl_loss.item()}")
+        
         # 温度系数缩放
-        return kl_loss * (temperature ** 2)
+        result = kl_loss * (temperature ** 2)
+        if self.accelerator.is_main_process:
+            print(f"Debug: final result: {result.item()}")
+        return result
     
     def _compute_initial_loss_scaling_factors(self):
         """计算初始损失缩放因子，使各损失组件按指定比例调整"""
