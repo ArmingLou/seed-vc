@@ -269,6 +269,7 @@ class Trainer:
                 original_distill_cfm_loss = 0.0
                 
                 if self.teacher_model is not None and (self.use_distill_ar or self.use_distill_cfm):
+                    print("Calculating distillation loss...")
                     # 使用教师模型生成目标输出
                     # 只计算需要蒸馏的模型部分的输出，提高效率
                     teacher_forward_ar = self.train_ar and self.use_distill_ar
@@ -286,6 +287,7 @@ class Trainer:
                     # 计算学生模型和教师模型输出之间的蒸馏损失
                     # 只有在对应模型被训练且启用了蒸馏时才计算蒸馏损失
                     if self.train_cfm and self.use_distill_cfm:
+                        print("Calculating CFM distillation loss...")
                         # CFM蒸馏损失
                         # 确保loss_cfm和teacher_loss_cfm都是张量且形状匹配
                         if isinstance(original_loss_cfm, torch.Tensor) and isinstance(teacher_loss_cfm, torch.Tensor):
@@ -305,6 +307,7 @@ class Trainer:
                             if self.accelerator.is_main_process:
                                 print(f"Warning: Type mismatch in CFM distillation loss - student: {type(original_loss_cfm)}, teacher: {type(teacher_loss_cfm)}")
                     if self.train_ar and self.use_distill_ar:
+                        print("Calculating AR distillation loss...")
                         # AR蒸馏损失
                         # 确保loss_ar和teacher_loss_ar都是张量且形状匹配
                         if isinstance(original_loss_ar, torch.Tensor) and isinstance(teacher_loss_ar, torch.Tensor):
