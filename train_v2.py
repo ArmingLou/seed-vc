@@ -150,6 +150,10 @@ class Trainer:
         self.best_train_loss = float('inf')  # 用于学习率调度的最佳训练损失
         self.switched_to_val_scheduler = False  # 学习率调度器切换状态
 
+        # 初始化ema_loss和其他相关属性
+        self.ema_loss = 0
+        self.loss_smoothing_rate = 0.99
+
         # Initialize training parameters
         self._init_dataloader(
             data_dir=data_dir,
