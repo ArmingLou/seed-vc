@@ -913,6 +913,7 @@ class Trainer:
             new_loss_scaling_factors['codebook'] = original_main_loss * target_codebook_ratio / original_codebook_loss if original_codebook_loss > 0 else 0.0
             apply_loss_scaling_factors['codebook'] = new_loss_scaling_factors['codebook']
         if original_distill_loss_val > self.loss_scaling_factors['distill_raw_max']:
+            print(f"当前原始蒸馏损失值: {original_distill_loss_val:.6f} 历史最大: {self.loss_scaling_factors['distill_raw_max']:.6f}")
             new_loss_scaling_factors['distill_raw_max'] = original_distill_loss_val
             new_loss_scaling_factors['distill'] = original_main_loss * target_distill_ratio / original_distill_loss_val if original_distill_loss_val > 0 else 0.0
             apply_loss_scaling_factors['distill'] = new_loss_scaling_factors['distill']
