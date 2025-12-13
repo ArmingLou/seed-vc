@@ -104,7 +104,10 @@ class Trainer:
             'main': 1.0,
             'commitment': 0.0,
             'codebook': 0.0,
-            'distill': 0.0
+            'distill': 0.0,
+            'commitment_raw_max': 0.0,
+            'codebook_raw_max': 0.0,
+            'distill_raw_max': 0.0
         }
         
         # 按文件名顺序加载数据以确保训练的一致性
@@ -884,28 +887,36 @@ class Trainer:
         target_distill_ratio = 0.0 if original_distill_loss_val <= 0 else self.distill_weight
         
         # 计算缩放因子
-        new_loss_scaling_factors = {}
-        new_loss_scaling_factors['main'] = 1.0
-        new_loss_scaling_factors['commitment'] = original_main_loss * target_commitment_ratio / original_commitment_loss if original_commitment_loss > 0 else 0.0
-        new_loss_scaling_factors['codebook'] = original_main_loss * target_codebook_ratio / original_codebook_loss if original_codebook_loss > 0 else 0.0
-        new_loss_scaling_factors['distill'] = original_main_loss * target_distill_ratio / original_distill_loss_val if original_distill_loss_val > 0 else 0.0
+        new_loss_scaling_factors = {
+            'main': 1.0,
+            'commitment': self.loss_scaling_factors['commitment'],
+            'codebook': self.loss_scaling_factors['codebook'],
+            'distill': self.loss_scaling_factors['distill'],
+            'commitment_raw_max': self.loss_scaling_factors['commitment_raw_max'],
+            'codebook_raw_max': self.loss_scaling_factors['codebook_raw_max'],
+            'distill_raw_max': self.loss_scaling_factors['distill_raw_max']
+        }
         
         apply_loss_scaling_factors = {
             'main': 1.0,
-            'commitment': new_loss_scaling_factors['commitment'],
-            'codebook': new_loss_scaling_factors['codebook'],
-            'distill': new_loss_scaling_factors['distill']
+            'commitment': self.loss_scaling_factors['commitment'],
+            'codebook': self.loss_scaling_factors['codebook'],
+            'distill': self.loss_scaling_factors['distill']
         }
         # 只用历史最小的缩放因子作为 当前的缩放因子
-        if self.loss_scaling_factors['commitment'] >0 and new_loss_scaling_factors['commitment'] > self.loss_scaling_factors['commitment']:
-            new_loss_scaling_factors['commitment'] = self.loss_scaling_factors['commitment']
-            apply_loss_scaling_factors['commitment'] = self.loss_scaling_factors['commitment']
-        if self.loss_scaling_factors['codebook'] >0 and new_loss_scaling_factors['codebook'] > self.loss_scaling_factors['codebook']:
-            new_loss_scaling_factors['codebook'] = self.loss_scaling_factors['codebook']
-            apply_loss_scaling_factors['codebook'] = self.loss_scaling_factors['codebook']
-        if self.loss_scaling_factors['distill'] >0 and new_loss_scaling_factors['distill'] > self.loss_scaling_factors['distill']:
-            new_loss_scaling_factors['distill'] = self.loss_scaling_factors['distill']
-            apply_loss_scaling_factors['distill'] = self.loss_scaling_factors['distill']
+        if original_commitment_loss > self.loss_scaling_factors['commitment_raw_max']:
+            new_loss_scaling_factors['commitment_raw_max'] = original_commitment_loss
+            new_loss_scaling_factors['commitment'] = original_main_loss * target_commitment_ratio / original_commitment_loss if original_commitment_loss > 0 else 0.0
+            apply_loss_scaling_factors['commitment'] = new_loss_scaling_factors['commitment']
+        if original_codebook_loss > self.loss_scaling_factors['codebook_raw_max']:
+            new_loss_scaling_factors['codebook_raw_max'] = original_codebook_loss
+            new_loss_scaling_factors['codebook'] = original_main_loss * target_codebook_ratio / original_codebook_loss if original_codebook_loss > 0 else 0.0
+            apply_loss_scaling_factors['codebook'] = new_loss_scaling_factors['codebook']
+        if original_distill_loss_val > self.loss_scaling_factors['distill_raw_max']:
+            new_loss_scaling_factors['distill_raw_max'] = original_distill_loss_val
+            new_loss_scaling_factors['distill'] = original_main_loss * target_distill_ratio / original_distill_loss_val if original_distill_loss_val > 0 else 0.0
+            apply_loss_scaling_factors['distill'] = new_loss_scaling_factors['distill']
+                
             
         commitment_loss_component = ori_commitment_loss_component * apply_loss_scaling_factors['commitment']
         codebook_loss_component = ori_codebook_loss_component * apply_loss_scaling_factors['codebook']
