@@ -64,7 +64,7 @@ class Trainer:
         self.max_steps = steps
 
         self.n_epochs = max_epochs
-        self.log_interval = config.get('log_interval', lr_adjust_interval)
+        self.log_interval = lr_adjust_interval
         self.save_interval = save_interval
 
         self.sr = config['preprocess_params'].get('sr', 22050)
@@ -599,12 +599,17 @@ class Trainer:
             _ = [self.teacher_model[key].to(self.device) for key in self.teacher_model]
             # 初始化教师模型的缓存
             self.teacher_model.cfm.estimator.setup_caches(max_batch_size=self.batch_size, max_seq_length=8192)
+            
+            # 加载教师模型参数
             self.teacher_model, _, _, _ = load_checkpoint(
                 self.teacher_model, None, teacher_checkpoint,
                 load_only_params=True,  # 只加载模型参数
                 ignore_modules=[],
                 is_distributed=False
             )
+            # 保存最后加载的检查点路径，用于下次判断是否为自蒸馏
+            self._last_loaded_checkpoint = teacher_checkpoint
+            
             # 确保教师模型参数完全冻结
             for key in self.teacher_model:
                 for param in self.teacher_model[key].parameters():
@@ -622,8 +627,7 @@ class Trainer:
                         param.requires_grad = False
             print(f"教师模型加载完成: {teacher_checkpoint}")
         else:
-            print("未找到教师模型检查点，将不使用知识蒸馏")
-        
+            print("未找到教师模型检查点，将不使用知识蒸馏")        
     def _compute_initial_loss_scaling_factors(self):
         """计算初始损失缩放因子，使各损失组件按指定比例调整"""
         # 只保存初次计算的值，避免续训练重置缩放因子，也避免被 0 覆盖原有非 0 的值，确保缩放因子即使断点续训练从头到尾保持最早的值，而不是续训练时新计算。
@@ -762,9 +766,26 @@ class Trainer:
                         y_list.append(y)
                 y = torch.cat(y_list, dim=0)
                     
+                # 为了确保教师模型和学生模型使用相同的随机种子，我们需要固定随机种子
+                # 保存当前的随机种子状态
+                torch_rng_state = torch.get_rng_state()
+                cuda_rng_state = None
+                if torch.cuda.is_available():
+                    cuda_rng_state = torch.cuda.get_rng_state()
+                
+                # 设置固定的随机种子以确保一致性
+                torch.manual_seed(0)
+                if torch.cuda.is_available():
+                    torch.cuda.manual_seed(0)
+                
                 # 计算各损失组件的原始值
                 original_loss, student_output = self.model.cfm(x, target_lengths, prompt_len, cond, y)
-                    
+                
+                # 重置随机种子以确保教师模型使用相同的随机数序列
+                torch.manual_seed(0)
+                if torch.cuda.is_available():
+                    torch.cuda.manual_seed(0)
+                
                 # 计算承诺损失和码本损失
                 original_alt_commitment_loss = alt_commitment_loss
                 original_ori_commitment_loss = ori_commitment_loss
@@ -773,11 +794,12 @@ class Trainer:
                     
                 # 计算蒸馏损失（如果有教师模型）
                 original_distill_loss = torch.tensor(0.0, device=self.device)
+                teacher_output = None
                 if self.teacher_model is not None and self.use_distill:
                     with torch.no_grad():
                         # 使用教师模型生成目标输出
                         teacher_loss, teacher_output = self.teacher_model.cfm(x, target_lengths, prompt_len, cond, y)
-                        
+                    
                     # 确保student_output和teacher_output都是张量且形状匹配
                     if isinstance(student_output, list):
                         # 如果是列表，取第一个元素
@@ -801,6 +823,11 @@ class Trainer:
                         # 使用KL散度计算蒸馏损失，添加温度参数支持
                         original_distill_loss = self.compute_kl_distill_loss(student_output_adj, teacher_output_adj.detach(), temperature=self.distill_temperature)
                     
+                # 恢复之前的随机种子状态
+                torch.set_rng_state(torch_rng_state)
+                if cuda_rng_state is not None:
+                    torch.cuda.set_rng_state(cuda_rng_state)
+                    
                 # 获取原始损失值
                 original_main_loss = original_loss.item()
                 original_commitment_loss = (original_alt_commitment_loss + original_ori_commitment_loss).item()
@@ -817,7 +844,7 @@ class Trainer:
                 print(f"  主CFM损失: {original_main_loss:.6f}")
                 print(f"  承诺损失: {original_commitment_loss:.6f}")
                 print(f"  码本损失: {original_codebook_loss:.6f}")
-                print(f"  蒸馏损失: {original_distill_loss_val:.6f}")
+                print(f"  蒸馏损失: {original_distill_loss_val:.10f}")
                 print(f"  总损失: {original_total_loss:.6f}")
                 
                     
@@ -878,7 +905,7 @@ class Trainer:
                 print(f"  主CFM损失: {target_main_loss:.6f}")
                 print(f"  承诺损失: {target_commitment_loss:.6f}")
                 print(f"  码本损失: {target_codebook_loss:.6f}")
-                print(f"  蒸馏损失: {target_distill_loss:.6f}")
+                print(f"  蒸馏损失: {target_distill_loss:.10f}")
                 print(f"  总损失: {target_total_loss:.6f}")
                 
                 if self.ema_loss is None or self.ema_loss == 0:
@@ -1181,10 +1208,28 @@ class Trainer:
                 y_list.append(y)
         y = torch.cat(y_list, dim=0)
 
+        # 为了确保教师模型和学生模型使用相同的随机种子，我们需要固定随机种子
+        # 保存当前的随机种子状态
+        torch_rng_state = torch.get_rng_state()
+        cuda_rng_state = None
+        if torch.cuda.is_available():
+            cuda_rng_state = torch.cuda.get_rng_state()
+        
+        # 设置固定的随机种子以确保一致性
+        torch.manual_seed(0)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(0)
+        
         loss, student_output = self.model.cfm(x, target_lengths, prompt_len, cond, y)
+        
+        # 重置随机种子以确保教师模型使用相同的随机数序列
+        torch.manual_seed(0)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(0)
 
         # 如果有教师模型，添加知识蒸馏损失
         distill_loss = torch.tensor(0.0, device=self.device)
+        teacher_output = None
         if self.teacher_model is not None and self.use_distill:
             # 确保教师模型处于评估模式
             _ = [self.teacher_model[key].eval() for key in self.teacher_model]
@@ -1201,6 +1246,12 @@ class Trainer:
             with torch.no_grad():
                 # 使用教师模型生成目标输出
                 teacher_loss, teacher_output = self.teacher_model.cfm(x, target_lengths, prompt_len, cond, y)
+            
+            # 恢复之前的随机种子状态
+            torch.set_rng_state(torch_rng_state)
+            if cuda_rng_state is not None:
+                torch.cuda.set_rng_state(cuda_rng_state)
+            
             # 计算学生模型和教师模型输出之间的蒸馏损失
             # 确保student_output和teacher_output都是张量且形状匹配
             if isinstance(student_output, list):
@@ -1224,6 +1275,11 @@ class Trainer:
                 teacher_output_adj = teacher_output[:min_size] if teacher_output.size(0) > min_size else teacher_output
                 # 使用KL散度计算蒸馏损失，添加温度参数支持
                 distill_loss = self.compute_kl_distill_loss(student_output_adj, teacher_output_adj.detach(), temperature=self.distill_temperature)
+        else:
+            # 恢复之前的随机种子状态
+            torch.set_rng_state(torch_rng_state)
+            if cuda_rng_state is not None:
+                torch.cuda.set_rng_state(cuda_rng_state)
         
         # 计算各损失组件
         # 使用动态损失平衡机制，根据初始化时计算的缩放因子调整各损失组件
@@ -1248,7 +1304,7 @@ class Trainer:
             print(f"  Commitment Loss: {commitment_loss_component.item():.6f} (alt: {alt_commitment_loss.item():.6f}, ori: {ori_commitment_loss.item():.6f}, scale: {self.loss_scaling_factors['commitment']:.6f})")
             print(f"  Codebook Loss: {codebook_loss_component.item():.6f} (alt: {alt_codebook_loss.item():.6f}, ori: {ori_codebook_loss.item():.6f}, scale: {self.loss_scaling_factors['codebook']:.6f})")
             if self.teacher_model is not None and self.use_distill:
-                print(f"  Distill Loss: {distill_loss_component.item():.6f} (raw: {distill_loss.item():.6f}, scale: {self.loss_scaling_factors['distill']:.6f})")
+                print(f"  Distill Loss: {distill_loss_component.item():.10f} (raw: {distill_loss.item():.10f}, scale: {self.loss_scaling_factors['distill']:.6f})")
             print(f"  Total Training Loss: {loss_total.item():.6f}")
             # 同时打印各组件占总损失的比例
             total_components = loss_total.item()
@@ -1773,6 +1829,7 @@ def main(args):
     dataset_name = os.path.basename(os.path.normpath(args.dataset_dir))
     version_run_name = f"{args.run_name}_{dataset_name}"
     
+
     trainer = Trainer(
         config_path=args.config,
         pretrained_ckpt_path=args.pretrained_ckpt,

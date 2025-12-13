@@ -152,7 +152,8 @@ class BASECFM(torch.nn.Module, ABC):
             loss += self.criterion(estimator_out[bib, :, prompt_lens[bib]:x_lens[bib]], u[bib, :, prompt_lens[bib]:x_lens[bib]])
         loss /= b
 
-        return loss, estimator_out + (1 - self.sigma_min) * z
+        # 返回损失值和估计器输出，用于知识蒸馏
+        return loss, estimator_out
 
 
 
