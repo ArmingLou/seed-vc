@@ -463,15 +463,20 @@ class Trainer:
             'distill_cfm': self.loss_scaling_factors['distill_cfm']
         }
         
+        diff_distill_ar_loss = (original_loss_distill_ar_val - self.loss_scaling_factors['distill_ar_raw_max'])/ self.iters if self.iters > 0 else 0
+        new_distill_ar_loss = self.loss_scaling_factors['distill_ar_raw_max'] + diff_distill_ar_loss
         # 只用历史最小的缩放因子作为 当前的缩放因子
-        if original_loss_distill_ar_val > self.loss_scaling_factors['distill_ar_raw_max']:
-            new_loss_scaling_factors['distill_ar_raw_max'] = original_loss_distill_ar_val
-            new_loss_scaling_factors['distill_ar'] = original_loss_ar_val * target_distill_ar_ratio / original_loss_distill_ar_val  if original_loss_distill_ar_val > 0 else 0.0
-            apply_loss_scaling_factors['distill_ar'] = new_loss_scaling_factors['distill_ar']
-        if original_loss_distill_cfm_val > self.loss_scaling_factors['distill_cfm_raw_max']:
-            new_loss_scaling_factors['distill_cfm_raw_max'] = original_loss_distill_cfm_val
-            new_loss_scaling_factors['distill_cfm'] = original_loss_cfm_val * target_distill_cfm_ratio / original_loss_distill_cfm_val if original_loss_distill_cfm_val > 0 else 0.0
-            apply_loss_scaling_factors['distill_cfm'] = new_loss_scaling_factors['distill_cfm']
+        # if original_loss_distill_ar_val > self.loss_scaling_factors['distill_ar_raw_max']:
+        new_loss_scaling_factors['distill_ar_raw_max'] = new_distill_ar_loss
+        new_loss_scaling_factors['distill_ar'] = original_loss_ar_val * target_distill_ar_ratio / new_distill_ar_loss  if new_distill_ar_loss > 0 else 0.0
+        apply_loss_scaling_factors['distill_ar'] = new_loss_scaling_factors['distill_ar']
+        
+        diff_distill_cfm_loss = (original_loss_distill_cfm_val - self.loss_scaling_factors['distill_cfm_raw_max'])/ self.iters if self.iters > 0 else 0
+        new_distill_cfm_loss = self.loss_scaling_factors['distill_cfm_raw_max'] + diff_distill_cfm_loss
+        # if original_loss_distill_cfm_val > self.loss_scaling_factors['distill_cfm_raw_max']:
+        new_loss_scaling_factors['distill_cfm_raw_max'] = new_distill_cfm_loss
+        new_loss_scaling_factors['distill_cfm'] = original_loss_cfm_val * target_distill_cfm_ratio / new_distill_cfm_loss if new_distill_cfm_loss > 0 else 0.0
+        apply_loss_scaling_factors['distill_cfm'] = new_loss_scaling_factors['distill_cfm']
         
             
         scaled_loss_distill_ar = original_loss_distill_ar * apply_loss_scaling_factors['distill_ar']

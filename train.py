@@ -903,20 +903,28 @@ class Trainer:
             'codebook': self.loss_scaling_factors['codebook'],
             'distill': self.loss_scaling_factors['distill']
         }
+        diff_commitment_loss = (original_commitment_loss - self.loss_scaling_factors['commitment_raw_max'])/ self.iters if self.iters > 0 else 0
+        new_commitment_loss = self.loss_scaling_factors['commitment_raw_max'] + diff_commitment_loss
         # 只用历史最小的缩放因子作为 当前的缩放因子
-        if original_commitment_loss > self.loss_scaling_factors['commitment_raw_max']:
-            new_loss_scaling_factors['commitment_raw_max'] = original_commitment_loss
-            new_loss_scaling_factors['commitment'] = original_main_loss * target_commitment_ratio / original_commitment_loss if original_commitment_loss > 0 else 0.0
-            apply_loss_scaling_factors['commitment'] = new_loss_scaling_factors['commitment']
-        if original_codebook_loss > self.loss_scaling_factors['codebook_raw_max']:
-            new_loss_scaling_factors['codebook_raw_max'] = original_codebook_loss
-            new_loss_scaling_factors['codebook'] = original_main_loss * target_codebook_ratio / original_codebook_loss if original_codebook_loss > 0 else 0.0
-            apply_loss_scaling_factors['codebook'] = new_loss_scaling_factors['codebook']
-        if original_distill_loss_val > self.loss_scaling_factors['distill_raw_max']:
-            print(f"当前原始蒸馏损失值: {original_distill_loss_val:.6f} 历史最大: {self.loss_scaling_factors['distill_raw_max']:.6f}")
-            new_loss_scaling_factors['distill_raw_max'] = original_distill_loss_val
-            new_loss_scaling_factors['distill'] = original_main_loss * target_distill_ratio / original_distill_loss_val if original_distill_loss_val > 0 else 0.0
-            apply_loss_scaling_factors['distill'] = new_loss_scaling_factors['distill']
+        # if original_commitment_loss > self.loss_scaling_factors['commitment_raw_max']:
+        new_loss_scaling_factors['commitment_raw_max'] = new_commitment_loss
+        new_loss_scaling_factors['commitment'] = original_main_loss * target_commitment_ratio / new_commitment_loss if new_commitment_loss > 0 else 0.0
+        apply_loss_scaling_factors['commitment'] = new_loss_scaling_factors['commitment']
+            
+        diff_codebook_loss = (original_codebook_loss - self.loss_scaling_factors['codebook_raw_max'])/ self.iters if self.iters > 0 else 0 
+        new_codebook_loss = self.loss_scaling_factors['codebook_raw_max'] + diff_codebook_loss
+        # if original_codebook_loss > self.loss_scaling_factors['codebook_raw_max']:
+        new_loss_scaling_factors['codebook_raw_max'] = new_codebook_loss
+        new_loss_scaling_factors['codebook'] = original_main_loss * target_codebook_ratio / new_codebook_loss if new_codebook_loss > 0 else 0.0
+        apply_loss_scaling_factors['codebook'] = new_loss_scaling_factors['codebook']
+            
+        diff_distill_loss_val = (original_distill_loss_val - self.loss_scaling_factors['distill_raw_max'])/ self.iters if self.iters > 0 else 0
+        new_distill_loss_val = self.loss_scaling_factors['distill_raw_max'] + diff_distill_loss_val
+        # if original_distill_loss_val > self.loss_scaling_factors['distill_raw_max']:
+        # print(f"当前原始蒸馏损失值: {original_distill_loss_val:.6f} 历史最大: {self.loss_scaling_factors['distill_raw_max']:.6f}")
+        new_loss_scaling_factors['distill_raw_max'] = new_distill_loss_val
+        new_loss_scaling_factors['distill'] = original_main_loss * target_distill_ratio / new_distill_loss_val if new_distill_loss_val > 0 else 0.0
+        apply_loss_scaling_factors['distill'] = new_loss_scaling_factors['distill']
                 
             
         commitment_loss_component = ori_commitment_loss_component * apply_loss_scaling_factors['commitment']
