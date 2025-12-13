@@ -178,7 +178,7 @@ class Trainer:
         # 训练状态参数
         self.iters = 0
         self.epoch = 0
-        self.log_interval = 10
+        self.log_interval = lr_adjust_interval
         self.max_steps = steps
         self.save_interval = save_interval
         self.max_epochs = max_epochs
@@ -291,6 +291,7 @@ class Trainer:
                         # CFM蒸馏损失
                         # 确保logits_cfm和teacher_logits_cfm都是张量且形状匹配
                         if isinstance(original_logits_cfm, torch.Tensor) and isinstance(teacher_logits_cfm, torch.Tensor):
+                            # 检查形状是否匹配，如果不匹配尝试调整
                             if original_logits_cfm.size() == teacher_logits_cfm.size():
                                 # 确保数据类型一致
                                 if original_logits_cfm.dtype != teacher_logits_cfm.dtype:
@@ -303,6 +304,34 @@ class Trainer:
                             else:
                                 if self.accelerator.is_main_process:
                                     print(f"Warning: Shape mismatch in CFM distillation loss - student: {original_logits_cfm.size()}, teacher: {teacher_logits_cfm.size()}")
+                                
+                                # 尝试调整形状以匹配
+                                if original_logits_cfm.dim() == 3 and teacher_logits_cfm.dim() == 3:
+                                    # 如果只是序列长度不同，尝试截断或填充
+                                    student_len = original_logits_cfm.size(1)
+                                    teacher_len = teacher_logits_cfm.size(1)
+                                    
+                                    if student_len > teacher_len:
+                                        # 截断学生输出以匹配教师输出
+                                        original_logits_cfm = original_logits_cfm[:, :teacher_len, :]
+                                        if self.accelerator.is_main_process:
+                                            print(f"截断学生输出以匹配教师输出: {student_len} -> {teacher_len}")
+                                    elif teacher_len > student_len:
+                                        # 截断教师输出以匹配学生输出
+                                        teacher_logits_cfm = teacher_logits_cfm[:, :student_len, :]
+                                        if self.accelerator.is_main_process:
+                                            print(f"截断教师输出以匹配学生输出: {teacher_len} -> {student_len}")
+                                    
+                                    # 现在重新计算蒸馏损失
+                                    if original_logits_cfm.size() == teacher_logits_cfm.size():
+                                        if original_logits_cfm.dtype != teacher_logits_cfm.dtype:
+                                            if self.accelerator.is_main_process:
+                                                print(f"警告: CFM蒸馏logits数据类型不一致 - student: {original_logits_cfm.dtype}, teacher: {teacher_logits_cfm.dtype}")
+                                            teacher_logits_cfm = teacher_logits_cfm.to(original_logits_cfm.dtype)
+                                        kl_loss = self.compute_kl_distill_loss(original_logits_cfm, teacher_logits_cfm.detach(), temperature=self.distill_temperature)
+                                        original_distill_cfm_loss = kl_loss.item()
+                                        if self.accelerator.is_main_process:
+                                            print(f"成功调整形状后计算蒸馏损失: {original_logits_cfm.size()}")
                         else:
                             if self.accelerator.is_main_process:
                                 print(f"Warning: Type mismatch in CFM distillation loss - student: {type(original_logits_cfm)}, teacher: {type(teacher_logits_cfm)}")
@@ -311,6 +340,7 @@ class Trainer:
                         # AR蒸馏损失
                         # 确保logits_ar和teacher_logits_ar都是张量且形状匹配
                         if isinstance(original_logits_ar, torch.Tensor) and isinstance(teacher_logits_ar, torch.Tensor):
+                            # 检查形状是否匹配，如果不匹配尝试调整
                             if original_logits_ar.size() == teacher_logits_ar.size():
                                 print("2 Calculating AR distillation loss...")
                                 # 确保数据类型一致
@@ -325,6 +355,34 @@ class Trainer:
                                 print("3 Calculating AR distillation loss...")
                                 if self.accelerator.is_main_process:
                                     print(f"Warning: Shape mismatch in AR distillation loss - student: {original_logits_ar.size()}, teacher: {teacher_logits_ar.size()}")
+                                
+                                # 尝试调整形状以匹配
+                                if original_logits_ar.dim() == 3 and teacher_logits_ar.dim() == 3:
+                                    # 如果只是序列长度不同，尝试截断或填充
+                                    student_len = original_logits_ar.size(1)
+                                    teacher_len = teacher_logits_ar.size(1)
+                                    
+                                    if student_len > teacher_len:
+                                        # 截断学生输出以匹配教师输出
+                                        original_logits_ar = original_logits_ar[:, :teacher_len, :]
+                                        if self.accelerator.is_main_process:
+                                            print(f"截断学生输出以匹配教师输出: {student_len} -> {teacher_len}")
+                                    elif teacher_len > student_len:
+                                        # 截断教师输出以匹配学生输出
+                                        teacher_logits_ar = teacher_logits_ar[:, :student_len, :]
+                                        if self.accelerator.is_main_process:
+                                            print(f"截断教师输出以匹配学生输出: {teacher_len} -> {student_len}")
+                                    
+                                    # 现在重新计算蒸馏损失
+                                    if original_logits_ar.size() == teacher_logits_ar.size():
+                                        if original_logits_ar.dtype != teacher_logits_ar.dtype:
+                                            if self.accelerator.is_main_process:
+                                                print(f"警告: AR蒸馏logits数据类型不一致 - student: {original_logits_ar.dtype}, teacher: {teacher_logits_ar.dtype}")
+                                            teacher_logits_ar = teacher_logits_ar.to(original_logits_ar.dtype)
+                                        kl_loss = self.compute_kl_distill_loss(original_logits_ar, teacher_logits_ar.detach(), temperature=self.distill_temperature)
+                                        original_distill_ar_loss = kl_loss.item()
+                                        if self.accelerator.is_main_process:
+                                            print(f"成功调整形状后计算蒸馏损失: {original_logits_ar.size()}")
                         else:
                             print("4 Calculating AR distillation loss...")
                             if self.accelerator.is_main_process:
@@ -377,9 +435,9 @@ class Trainer:
                 self.loss_scaling_factors['ar'] = 1.0
                 self.loss_scaling_factors['cfm'] = 1.0
                 if distill_ar_need_comp:
-                    self.loss_scaling_factors['distill_ar'] = target_ar_loss * target_distill_ar_ratio / original_distill_ar_loss  if original_distill_ar_loss > 0 else 0.0
+                    self.loss_scaling_factors['distill_ar'] = original_ar_loss_val * target_distill_ar_ratio / original_distill_ar_loss  if original_distill_ar_loss > 0 else 0.0
                 if distill_cfm_need_comp:
-                    self.loss_scaling_factors['distill_cfm'] = target_cfm_loss * target_distill_cfm_ratio / original_distill_cfm_loss if original_distill_cfm_loss > 0 else 0.0
+                    self.loss_scaling_factors['distill_cfm'] = original_cfm_loss_val * target_distill_cfm_ratio / original_distill_cfm_loss if original_distill_cfm_loss > 0 else 0.0
                 
                 if self.accelerator.is_main_process:
                     print(f"缩放因子:")
@@ -494,9 +552,11 @@ class Trainer:
         )
         
         # 创建余弦退火调度器
+        # 确保T_max至少为1，防止除零错误
+        cosine_T_max = max(1, self.max_steps - self.warmup_steps)
         self.cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             self.optimizer,
-            T_max=self.max_steps - self.warmup_steps,
+            T_max=cosine_T_max,
             eta_min=self.min_lr
         )
 
@@ -565,13 +625,11 @@ class Trainer:
         
         # 检查是否找到了检查点文件
         found_checkpoint = cfm_checkpoint_path or ar_checkpoint_path
-        checkpoint_path = cfm_checkpoint_path if cfm_checkpoint_path else ar_checkpoint_path
         
         with self.accelerator.main_process_first():
             
             # 只有在checkpoint_type为"local"的情况下才从检查点恢复状态，其他情况都视为首次训练
-            is_local_checkpoint = (checkpoint_type == "local")
-            should_restore_from_checkpoint = is_local_checkpoint
+            should_restore_from_checkpoint = (checkpoint_type == "local")
             
             # 如果找到了检查点文件，尝试恢复训练状态
             if found_checkpoint and should_restore_from_checkpoint:
@@ -591,88 +649,8 @@ class Trainer:
                         if self.train_ar:
                             ar_checkpoint_path = pretrained_ar_ckpt_path
                         checkpoint_type = "pretrained"
+                        should_restore_from_checkpoint = False
                         raise Exception("train_cfm and train_ar not match in checkpoint state")
-                    
-                    # 恢复训练状态
-                    if 'iters' in state:
-                        self.iters = state['iters']
-                    if 'epoch' in state:
-                        self.epoch = state['epoch']
-                    
-                    # 恢复验证相关状态
-                    if 'best_val_loss' in state:
-                        self.best_val_loss = state['best_val_loss']
-                        print(f"Loaded best_val_loss: {self.best_val_loss}")
-                        
-                    # 恢复 loss 缩放因子
-                    if 'loss_scaling_factors' in state:
-                        self.loss_scaling_factors = state['loss_scaling_factors']
-                        print(f"Loaded loss_scaling_factors: {self.loss_scaling_factors}")
-                        
-                    if 'patience_counter' in state:
-                        if self.resume_lr > 0.0:
-                            #强制设置 恢复学习率时， 也强制重置 早停耐心计数器。
-                            print("Using resume_lr > 0.0, forcing patience_counter to 0")
-                            self.patience_counter = 0
-                        else:
-                            self.patience_counter = state['patience_counter']
-                            print(f"Loaded patience_counter: {self.patience_counter}")
-                            
-                    if 'ema_loss' in state:
-                        self.ema_loss = state['ema_loss']
-                    
-                    # 恢复学习率相关状态
-                    if 'best_train_loss' in state:
-                        self.best_train_loss = state['best_train_loss']
-                        print(f"Loaded best_train_loss: {self.best_train_loss}")
-                    if 'switched_to_val_scheduler' in state:
-                        self.switched_to_val_scheduler = state['switched_to_val_scheduler']
-                    
-                    # 恢复学习率调度器状态
-                    if 'scheduler' in state:
-                        try:
-                            self.scheduler.load_state_dict(state['scheduler'])
-                        except Exception as e:
-                            print(f"Warning: Could not load scheduler state from checkpoint: {e}")
-                    
-                    print(f"Loaded training state from checkpoint: epoch {self.epoch}, step {self.iters}")
-                    
-                    # When loading from checkpoint, epoch represents the epoch index (0-based)
-                    # After loading, self.epoch represents the next epoch to train
-                    # According to specification, we should increment epoch here to match V1 behavior
-                    if checkpoint_type == "local":
-                        # self.epoch += 1
-                        print(f"Loaded local checkpoint from {checkpoint_to_load} with validation states")
-                        print(f"Resuming from epoch {self.epoch}, step {self.iters}")
-                    
-                    # 如果是断点续训练，需要将学习率调度器快进到当前step
-                    if self.iters > 0:
-                        print(f"Fast-forwarding learning rate scheduler to step {self.iters}...")
-                        for step in range(self.iters):
-                            if step < self.warmup_steps:
-                                # 预热阶段
-                                self.warmup_scheduler.step()
-                            elif step == self.warmup_steps:
-                                # 预热结束，开始余弦退火
-                                self.cosine_scheduler.last_epoch = 0
-                                self.cosine_scheduler.step()
-                            else:
-                                # 余弦退火阶段
-                                self.cosine_scheduler.step()
-                        print(f"Learning rate scheduler fast-forwarded to step {self.iters}")
-                        
-                        # 获取检查点中保存的学习率
-                        if 'current_lr' in state:
-                            # 如果指定了大于0的resume_lr值，则强制使用该值作为当前学习率
-                            if self.resume_lr > 0.0:
-                                checkpoint_lr = self.resume_lr
-                                print(f"Using resume_lr ({self.resume_lr}) to override checkpoint current_lr ({state['current_lr']})")
-                            else:
-                                checkpoint_lr = state['current_lr']
-                            # 设置优化器的学习率到检查点中保存的值
-                            for param_group in self.optimizer.param_groups:
-                                param_group['lr'] = checkpoint_lr
-                            print(f"Set optimizer learning rate to {checkpoint_lr:.2e}")
                 except Exception as e:
                     print(f"Warning: Could not load training state from checkpoint: {e}")
                     print(f"Loaded teacher/pretrained checkpoint, starting from scratch")
@@ -698,13 +676,102 @@ class Trainer:
             if ar_checkpoint_path:
                 print(f"Loading AR checkpoint from {ar_checkpoint_path}")
             
+            
             # 加载模型检查点，只传递需要的检查点路径，并传递train_cfm和train_ar参数
-            self.model.load_checkpoints(
+            state = self.model.load_checkpoints(
                 cfm_checkpoint_path=cfm_checkpoint_path if self.train_cfm else None, 
                 ar_checkpoint_path=ar_checkpoint_path if self.train_ar else None,
                 train_cfm=self.train_cfm,
-                train_ar=self.train_ar
+                train_ar=self.train_ar,
+                load_training_state=should_restore_from_checkpoint,  # 根据检查点类型决定是否加载完整训练状态
+                optimizer=self.optimizer if should_restore_from_checkpoint else None,  # 只有本地检查点才加载优化器状态
+                scheduler=self.scheduler if should_restore_from_checkpoint else None,  # 只有本地检查点才加载调度器状态
             )
+            if should_restore_from_checkpoint and state is not None:
+                # 恢复训练状态
+                if 'iters' in state:
+                    self.iters = state['iters']
+                if 'epoch' in state:
+                    self.epoch = state['epoch']
+                
+                # 恢复验证相关状态
+                if 'best_val_loss' in state:
+                    self.best_val_loss = state['best_val_loss']
+                    print(f"Loaded best_val_loss: {self.best_val_loss}")
+                    
+                # 恢复 loss 缩放因子
+                if 'loss_scaling_factors' in state:
+                    self.loss_scaling_factors = state['loss_scaling_factors']
+                    print(f"Loaded loss_scaling_factors: {self.loss_scaling_factors}")
+                    
+                if 'patience_counter' in state:
+                    if self.resume_lr > 0.0:
+                        #强制设置 恢复学习率时， 也强制重置 早停耐心计数器。
+                        print("Using resume_lr > 0.0, forcing patience_counter to 0")
+                        self.patience_counter = 0
+                    else:
+                        self.patience_counter = state['patience_counter']
+                        print(f"Loaded patience_counter: {self.patience_counter}")
+                        
+                if 'ema_loss' in state:
+                    self.ema_loss = state['ema_loss']
+                
+                # 恢复学习率相关状态
+                if 'best_train_loss' in state:
+                    self.best_train_loss = state['best_train_loss']
+                    print(f"Loaded best_train_loss: {self.best_train_loss}")
+                if 'switched_to_val_scheduler' in state:
+                    self.switched_to_val_scheduler = state['switched_to_val_scheduler']
+                
+                # 恢复学习率调度器状态
+                if 'scheduler' in state:
+                    try:
+                        self.scheduler.load_state_dict(state['scheduler'])
+                    except Exception as e:
+                        print(f"Warning: Could not load scheduler state from checkpoint: {e}")
+                
+                print(f"Loaded training state from checkpoint: epoch {self.epoch}, step {self.iters}")
+                
+                # When loading from checkpoint, epoch represents the epoch index (0-based)
+                # After loading, self.epoch represents the next epoch to train
+                # According to specification, we should increment epoch here to match V1 behavior
+                if checkpoint_type == "local":
+                    # self.epoch += 1
+                    print(f"Loaded local checkpoint from {checkpoint_to_load} with validation states")
+                    print(f"Resuming from epoch {self.epoch}, step {self.iters}")
+                
+                # 如果是断点续训练，需要将学习率调度器快进到当前step
+                if self.iters > 0:
+                    print(f"Fast-forwarding learning rate scheduler to step {self.iters}...")
+                    for step in range(self.iters):
+                        if step < self.warmup_steps:
+                            # 预热阶段
+                            self.warmup_scheduler.step()
+                        elif step == self.warmup_steps:
+                            # 预热结束，开始余弦退火
+                            self.cosine_scheduler.last_epoch = 0
+                            self.cosine_scheduler.step()
+                        else:
+                            # 余弦退火阶段
+                            self.cosine_scheduler.step()
+                    print(f"Learning rate scheduler fast-forwarded to step {self.iters}")
+                    
+                    # 获取检查点中保存的学习率
+                    if 'current_lr' in state:
+                        # 如果指定了大于0的resume_lr值，则强制使用该值作为当前学习率
+                        if self.resume_lr > 0.0:
+                            checkpoint_lr = self.resume_lr
+                            print(f"Using resume_lr ({self.resume_lr}) to override checkpoint current_lr ({state['current_lr']})")
+                        else:
+                            checkpoint_lr = state['current_lr']
+                        # 设置优化器的学习率到检查点中保存的值
+                        for param_group in self.optimizer.param_groups:
+                            param_group['lr'] = checkpoint_lr
+                        print(f"Set optimizer learning rate to {checkpoint_lr:.2e}")
+            
+            # 如果加载了训练状态，更新相应的属性
+            # 注意：这部分逻辑已经在前面从检查点文件中加载状态时处理过了，
+            # 这里不再重复设置以避免覆盖optimizer等重要组件
             print(f"Starting from epoch {self.epoch}, step {self.iters}")
             
         # 准备模型用于分布式训练
@@ -826,15 +893,32 @@ class Trainer:
                     forward_ar=self.train_ar,
                     forward_cfm=self.train_cfm,
                 )
-
-                # 在验证时也应用相同的损失缩放因子
-                scaled_loss_ar = loss_ar * self.loss_scaling_factors['ar'] if isinstance(loss_ar, torch.Tensor) else torch.tensor(0.0, device=self.device)
-                scaled_loss_cfm = loss_cfm * self.loss_scaling_factors['cfm'] if isinstance(loss_cfm, torch.Tensor) else torch.tensor(0.0, device=self.device)
                 
-                loss = scaled_loss_ar + scaled_loss_cfm
+                # 确保loss_ar和loss_cfm是标量值后再打印
+                # 处理可能的元组情况
+                if isinstance(loss_ar, tuple):
+                    loss_ar_val = loss_ar[0].item() if isinstance(loss_ar[0], torch.Tensor) else loss_ar[0]
+                elif isinstance(loss_ar, torch.Tensor):
+                    loss_ar_val = loss_ar.item()
+                else:
+                    loss_ar_val = loss_ar
+                    
+                if isinstance(loss_cfm, tuple):
+                    loss_cfm_val = loss_cfm[0].item() if isinstance(loss_cfm[0], torch.Tensor) else loss_cfm[0]
+                elif isinstance(loss_cfm, torch.Tensor):
+                    loss_cfm_val = loss_cfm.item()
+                else:
+                    loss_cfm_val = loss_cfm
+                    
+                # 在验证时也应用相同的损失缩放因子
+                # 确保loss_ar和loss_cfm是张量后再进行计算
+                scaled_loss_ar = loss_ar_val * self.loss_scaling_factors['ar']
+                scaled_loss_cfm = loss_cfm_val * self.loss_scaling_factors['cfm']
+                total_loss = scaled_loss_ar + scaled_loss_cfm
                 
                 # 验证时不包含蒸馏损失，但返回各组件用于详细打印
-                return loss.detach().item(), scaled_loss_ar.detach().item(), scaled_loss_cfm.detach().item()
+                # 确保返回的是数字
+                return total_loss, scaled_loss_ar, scaled_loss_cfm
     
     def validate(self):
         """在整个验证集上评估模型"""
@@ -913,6 +997,7 @@ class Trainer:
             'scheduler': self.scheduler.state_dict(),
             'current_lr': self.optimizer.param_groups[0]['lr'],  # 保存当前学习率
             'loss_scaling_factors': self.loss_scaling_factors,
+            'optimizer': self.optimizer.state_dict(),
         }
         
         # 根据训练参数决定保存哪些模型
@@ -1154,6 +1239,7 @@ class Trainer:
                         # CFM蒸馏损失
                         # 确保logits_cfm和teacher_logits_cfm都是张量且形状匹配
                         if isinstance(logits_cfm, torch.Tensor) and isinstance(teacher_logits_cfm, torch.Tensor):
+                            # 检查形状是否匹配，如果不匹配尝试调整
                             if logits_cfm.size() == teacher_logits_cfm.size():
                                 # 确保数据类型一致
                                 if logits_cfm.dtype != teacher_logits_cfm.dtype:
@@ -1166,12 +1252,38 @@ class Trainer:
                                 distill_loss += scaled_distill_cfm_loss
                             else:
                                 print(f"Warning: Shape mismatch in CFM distillation loss - student: {logits_cfm.size()}, teacher: {teacher_logits_cfm.size()}")
+                                
+                                # 尝试调整形状以匹配
+                                if logits_cfm.dim() == 3 and teacher_logits_cfm.dim() == 3:
+                                    # 如果只是序列长度不同，尝试截断或填充
+                                    student_len = logits_cfm.size(1)
+                                    teacher_len = teacher_logits_cfm.size(1)
+                                    
+                                    if student_len > teacher_len:
+                                        # 截断学生输出以匹配教师输出
+                                        logits_cfm = logits_cfm[:, :teacher_len, :]
+                                        print(f"截断学生输出以匹配教师输出: {student_len} -> {teacher_len}")
+                                    elif teacher_len > student_len:
+                                        # 截断教师输出以匹配学生输出
+                                        teacher_logits_cfm = teacher_logits_cfm[:, :student_len, :]
+                                        print(f"截断教师输出以匹配学生输出: {teacher_len} -> {student_len}")
+                                    
+                                    # 现在重新计算蒸馏损失
+                                    if logits_cfm.size() == teacher_logits_cfm.size():
+                                        if logits_cfm.dtype != teacher_logits_cfm.dtype:
+                                            print(f"警告: CFM蒸馏logits数据类型不一致 - student: {logits_cfm.dtype}, teacher: {teacher_logits_cfm.dtype}")
+                                            teacher_logits_cfm = teacher_logits_cfm.to(logits_cfm.dtype)
+                                        kl_loss = self.compute_kl_distill_loss(logits_cfm, teacher_logits_cfm.detach(), temperature=self.distill_temperature)
+                                        scaled_distill_cfm_loss = kl_loss * self.loss_scaling_factors['distill_cfm']
+                                        distill_loss += scaled_distill_cfm_loss
+                                        print(f"成功调整形状后计算蒸馏损失: {logits_cfm.size()}")
                         else:
                             print(f"Warning: Type mismatch in CFM distillation loss - student: {type(logits_cfm)}, teacher: {type(teacher_logits_cfm)}")
                     if self.train_ar and self.use_distill_ar:
                         # AR蒸馏损失
                         # 确保logits_ar和teacher_logits_ar都是张量且形状匹配
                         if isinstance(logits_ar, torch.Tensor) and isinstance(teacher_logits_ar, torch.Tensor):
+                            # 检查形状是否匹配，如果不匹配尝试调整
                             if logits_ar.size() == teacher_logits_ar.size():
                                 # 确保数据类型一致
                                 if logits_ar.dtype != teacher_logits_ar.dtype:
@@ -1184,6 +1296,32 @@ class Trainer:
                                 distill_loss += scaled_distill_ar_loss
                             else:
                                 print(f"Warning: Shape mismatch in AR distillation loss - student: {logits_ar.size()}, teacher: {teacher_logits_ar.size()}")
+                                
+                                # 尝试调整形状以匹配
+                                if logits_ar.dim() == 3 and teacher_logits_ar.dim() == 3:
+                                    # 如果只是序列长度不同，尝试截断或填充
+                                    student_len = logits_ar.size(1)
+                                    teacher_len = teacher_logits_ar.size(1)
+                                    
+                                    if student_len > teacher_len:
+                                        # 截断学生输出以匹配教师输出
+                                        logits_ar = logits_ar[:, :teacher_len, :]
+                                        print(f"截断学生输出以匹配教师输出: {student_len} -> {teacher_len}")
+                                    elif teacher_len > student_len:
+                                    # 截断教师输出以匹配学生输出
+                                        teacher_logits_ar = teacher_logits_ar[:, :student_len, :]
+                                        print(f"截断教师输出以匹配学生输出: {teacher_len} -> {student_len}")
+                                    
+                                    # 现在重新计算蒸馏损失
+                                    if logits_ar.size() == teacher_logits_ar.size():
+                                        if logits_ar.dtype != teacher_logits_ar.dtype:
+                                            print(f"警告: AR蒸馏logits数据类型不一致 - student: {logits_ar.dtype}, teacher: {teacher_logits_ar.dtype}")
+                                            teacher_logits_ar = teacher_logits_ar.to(logits_ar.dtype)
+                                        kl_loss = self.compute_kl_distill_loss(logits_ar, teacher_logits_ar.detach(), temperature=self.distill_temperature)
+                                        print(f"Applying loss scaling factor for AR distillation loss: {self.loss_scaling_factors['distill_ar']} kl_loss: {kl_loss}")
+                                        scaled_distill_ar_loss = kl_loss * self.loss_scaling_factors['distill_ar']
+                                        distill_loss += scaled_distill_ar_loss
+                                        print(f"成功调整形状后计算蒸馏损失: {logits_ar.size()}")
                         else:
                             print(f"Warning: Type mismatch in AR distillation loss - student: {type(logits_ar)}, teacher: {type(teacher_logits_ar)}")
                 loss_total = loss + distill_loss
@@ -1293,9 +1431,24 @@ class Trainer:
                     cur_lr = self.cosine_scheduler.get_last_lr()[0] if i != 0 else 0
 
                 # 打印详细的损失组件信息
+                # 处理可能的元组情况
+                if isinstance(loss_ar, tuple):
+                    loss_ar_val = loss_ar[0].item() if isinstance(loss_ar[0], torch.Tensor) else loss_ar[0]
+                elif isinstance(loss_ar, torch.Tensor):
+                    loss_ar_val = loss_ar.item()
+                else:
+                    loss_ar_val = loss_ar
+                    
+                if isinstance(loss_cfm, tuple):
+                    loss_cfm_val = loss_cfm[0].item() if isinstance(loss_cfm[0], torch.Tensor) else loss_cfm[0]
+                elif isinstance(loss_cfm, torch.Tensor):
+                    loss_cfm_val = loss_cfm.item()
+                else:
+                    loss_cfm_val = loss_cfm
+                    
                 print(f"\nDetailed Loss Components at epoch {epoch}, step {self.iters}:")
-                print(f"  AR Loss: {loss_ar.item():.6f}")
-                print(f"  CFM Loss: {loss_cfm.item():.6f}")
+                print(f"  AR Loss: {loss_ar_val:.6f}")
+                print(f"  CFM Loss: {loss_cfm_val:.6f}")
                 print(f"  Total Main Loss: {loss.item():.6f}")
                 if self.teacher_model is not None and (self.use_distill_ar or self.use_distill_cfm):
                     print(f"  Distill Loss: {distill_loss:.6f}")
@@ -1303,16 +1456,48 @@ class Trainer:
                 total_training_loss = loss.item() + (distill_loss if self.teacher_model is not None else 0)
                 print(f"  Total Training Loss: {total_training_loss:.6f}")
                 # 同时打印各组件占总损失的比例
+                # 确保loss_ar和loss_cfm是标量值后再计算比例
+                # 处理可能的元组情况
+                if isinstance(loss_ar, tuple):
+                    loss_ar_val = loss_ar[0].item() if isinstance(loss_ar[0], torch.Tensor) else loss_ar[0]
+                elif isinstance(loss_ar, torch.Tensor):
+                    loss_ar_val = loss_ar.item()
+                else:
+                    loss_ar_val = loss_ar
+                    
+                if isinstance(loss_cfm, tuple):
+                    loss_cfm_val = loss_cfm[0].item() if isinstance(loss_cfm[0], torch.Tensor) else loss_cfm[0]
+                elif isinstance(loss_cfm, torch.Tensor):
+                    loss_cfm_val = loss_cfm.item()
+                else:
+                    loss_cfm_val = loss_cfm
+                    
                 if total_training_loss > 0:
                     print(f"  Loss Composition:")
-                    print(f"    AR: {loss_ar.item()/total_training_loss*100:.1f}%")
-                    print(f"    CFM: {loss_cfm.item()/total_training_loss*100:.1f}%")
+                    print(f"    AR: {loss_ar_val/total_training_loss*100:.1f}%")
+                    print(f"    CFM: {loss_cfm_val/total_training_loss*100:.1f}%")
                     if self.teacher_model is not None and (self.use_distill_ar or self.use_distill_cfm):
                         print(f"    Distill: {distill_loss/total_training_loss*100:.1f}%")
 
                 # Log to console
+                # 确保loss_ar和loss_cfm是标量值后再打印
+                # 处理可能的元组情况
+                if isinstance(loss_ar, tuple):
+                    loss_ar_val = loss_ar[0].item() if isinstance(loss_ar[0], torch.Tensor) else loss_ar[0]
+                elif isinstance(loss_ar, torch.Tensor):
+                    loss_ar_val = loss_ar.item()
+                else:
+                    loss_ar_val = loss_ar
+                    
+                if isinstance(loss_cfm, tuple):
+                    loss_cfm_val = loss_cfm[0].item() if isinstance(loss_cfm[0], torch.Tensor) else loss_cfm[0]
+                elif isinstance(loss_cfm, torch.Tensor):
+                    loss_cfm_val = loss_cfm.item()
+                else:
+                    loss_cfm_val = loss_cfm
+                    
                 print("Epoch %d, Step %d, Iteration %d, Loss: 「%.4f」, Loss AR: %.4f, Loss CFM: %.4f, Grad Norm: %.4f, LR: %.6f"
-                      % (epoch, self.iters, i, total_training_loss, loss_ar.item(), loss_cfm.item(), grad_norm_g, cur_lr))
+                      % (epoch, self.iters, i, total_training_loss, loss_ar_val, loss_cfm_val, grad_norm_g, cur_lr))
                 
                 # 如果有验证集，也打印验证相关信息
                 if self.val_dataloader:
@@ -1341,6 +1526,7 @@ class Trainer:
             'scheduler': self.scheduler.state_dict(),
             'current_lr': self.optimizer.param_groups[0]['lr'],  # 保存当前学习率
             'loss_scaling_factors': self.loss_scaling_factors,
+            'optimizer': self.optimizer.state_dict(),
         }
         
         if self.train_ar:

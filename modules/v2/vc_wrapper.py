@@ -256,12 +256,23 @@ class VoiceConversionWrapper(torch.nn.Module):
             cfm_checkpoint_path = None,
             ar_checkpoint_path = None,
             train_cfm = True,
-            train_ar = True
+            train_ar = True,
+            load_training_state = False,  # 新增参数，控制是否加载完整训练状态
+            optimizer = None,  # 新增参数，用于加载优化器状态
+            scheduler = None,  # 新增参数，用于加载调度器状态
     ):
+        # 用于返回加载的训练状态
+        training_state = {}
+        
         # cfm
         if cfm_checkpoint_path is not None and train_cfm:
             print(f"Loading CFM checkpoint from {cfm_checkpoint_path}...")
             cfm_checkpoint = torch.load(cfm_checkpoint_path, map_location="cpu")
+            
+            # 如果需要加载完整训练状态
+            if load_training_state :
+                training_state.update(cfm_checkpoint)
+            
             # 检查检查点是否包含CFM部分
             if 'cfm' not in cfm_checkpoint.get("net", {}):
                 raise KeyError(f"CFM checkpoint does not contain 'cfm' key. Available keys in 'net': {list(cfm_checkpoint.get('net', {}).keys())}")
@@ -269,6 +280,19 @@ class VoiceConversionWrapper(torch.nn.Module):
             cfm_state_dict = self.strip_prefix(cfm_checkpoint["net"]['cfm'], "module.")
             missing_keys, unexpected_keys = self.cfm.load_state_dict(cfm_state_dict, strict=False)
             missing_keys, unexpected_keys = self.cfm_length_regulator.load_state_dict(cfm_length_regulator_state_dict, strict=False)
+            
+            # 如果需要加载训练状态，同时加载优化器和调度器状态
+            if load_training_state and optimizer is not None and 'optimizer' in cfm_checkpoint:
+                try:
+                    optimizer.load_state_dict(cfm_checkpoint['optimizer'])
+                except Exception as e:
+                    print(f"Warning: Could not load optimizer state from CFM checkpoint: {e}")
+            
+            if load_training_state and scheduler is not None and 'scheduler' in cfm_checkpoint:
+                try:
+                    scheduler.load_state_dict(cfm_checkpoint['scheduler'])
+                except Exception as e:
+                    print(f"Warning: Could not load scheduler state from CFM checkpoint: {e}")
         elif cfm_checkpoint_path is None and train_cfm:
             # 只有当cfm_checkpoint_path为None且需要训练CFM模型时才加载默认的CFM模型
             cfm_checkpoint_path = load_custom_model_from_hf(
@@ -285,6 +309,13 @@ class VoiceConversionWrapper(torch.nn.Module):
         if ar_checkpoint_path is not None and train_ar:
             print(f"Loading AR checkpoint from {ar_checkpoint_path}...")
             ar_checkpoint = torch.load(ar_checkpoint_path, map_location="cpu")
+            
+            # 如果需要加载完整训练状态
+            if load_training_state :
+                training_state.update(ar_checkpoint)
+            else:
+                print("Warning: Training state not found in AR checkpoint. Starting from scratch.")
+            
             # 检查检查点是否包含AR部分
             if 'ar' not in ar_checkpoint.get("net", {}):
                 raise KeyError(f"AR checkpoint does not contain 'ar' key. Available keys in 'net': {list(ar_checkpoint.get('net', {}).keys())}")
@@ -292,6 +323,19 @@ class VoiceConversionWrapper(torch.nn.Module):
             ar_state_dict = self.strip_prefix(ar_checkpoint["net"]['ar'], "module.")
             missing_keys, unexpected_keys = self.ar.load_state_dict(ar_state_dict, strict=False)
             missing_keys, unexpected_keys = self.ar_length_regulator.load_state_dict(ar_length_regulator_state_dict, strict=False)
+            
+            # 如果需要加载训练状态，同时加载优化器和调度器状态
+            if load_training_state and optimizer is not None and 'optimizer' in ar_checkpoint:
+                try:
+                    optimizer.load_state_dict(ar_checkpoint['optimizer'])
+                except Exception as e:
+                    print(f"Warning: Could not load optimizer state from AR checkpoint: {e}")
+            
+            if load_training_state and scheduler is not None and 'scheduler' in ar_checkpoint:
+                try:
+                    scheduler.load_state_dict(ar_checkpoint['scheduler'])
+                except Exception as e:
+                    print(f"Warning: Could not load scheduler state from AR checkpoint: {e}")
         elif ar_checkpoint_path is None and train_ar:
             # 只有当ar_checkpoint_path为None且需要训练AR模型时才加载默认的AR模型
             ar_checkpoint_path = load_custom_model_from_hf(
@@ -327,6 +371,8 @@ class VoiceConversionWrapper(torch.nn.Module):
         style_encoder_checkpoint_path = load_custom_model_from_hf(DEFAULT_SE_REPO_ID, DEFAULT_SE_CHECKPOINT, config_filename=None)
         style_encoder_checkpoint = torch.load(style_encoder_checkpoint_path, map_location="cpu")
         self.style_encoder.load_state_dict(style_encoder_checkpoint, strict=False)
+        
+        return training_state
 
     def setup_ar_caches(self, max_batch_size=1, max_seq_len=4096, dtype=torch.float32, device=torch.device("cpu")):
         self.ar.setup_caches(max_batch_size=max_batch_size, max_seq_len=max_seq_len, dtype=dtype, device=device)

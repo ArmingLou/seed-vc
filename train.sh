@@ -1075,7 +1075,7 @@ else
             --max-steps $MAX_STEPS \
             --max-epochs $MAX_EPOCHS \
             --save-every $SAVE_EVERY \
-            --num-workers 1 \
+            --num-workers 0 \
             $V2_TRAIN_ARGS
     else
         export FORCE_CPU=0
@@ -1085,7 +1085,7 @@ else
             run_with_logging accelerate launch $V2_SCRIPT $CONFIG_PARAM \
                 --dataset-dir $DATASET_DIR \
                 --run-name $RUN_NAME \
-                --batch-size 8 \
+                --batch-size 1 \
                 --max-steps $MAX_STEPS \
                 --max-epochs $MAX_EPOCHS \
                 --save-every $SAVE_EVERY \
@@ -1098,7 +1098,7 @@ else
                 run_with_logging accelerate launch $V2_SCRIPT $CONFIG_PARAM \
                     --dataset-dir $DATASET_DIR \
                     --run-name $RUN_NAME \
-                    --batch-size 8 \
+                    --batch-size 1 \
                     --max-steps $MAX_STEPS \
                     --max-epochs $MAX_EPOCHS \
                     --save-every $SAVE_EVERY \
@@ -1110,11 +1110,11 @@ else
                 run_with_logging python $V2_SCRIPT $CONFIG_PARAM \
                     --dataset-dir $DATASET_DIR \
                     --run-name $RUN_NAME \
-                    --batch-size 8 \
+                    --batch-size 1 \
                     --max-steps $MAX_STEPS \
                     --max-epochs $MAX_EPOCHS \
                     --save-every $SAVE_EVERY \
-                    --num-workers 1 \
+                    --num-workers 0 \
                     $V2_TRAIN_ARGS
             fi
         fi

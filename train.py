@@ -64,7 +64,7 @@ class Trainer:
         self.max_steps = steps
 
         self.n_epochs = max_epochs
-        self.log_interval = config.get('log_interval', 10)
+        self.log_interval = config.get('log_interval', lr_adjust_interval)
         self.save_interval = save_interval
 
         self.sr = config['preprocess_params'].get('sr', 22050)
@@ -492,9 +492,11 @@ class Trainer:
             )
         
         # 创建余弦退火调度器
+        # 确保T_max至少为1，防止除零错误
+        cosine_T_max = max(1, self.max_steps - self.warmup_steps)
         self.cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             self.optimizer.optimizers['cfm'],
-            T_max=self.max_steps - self.warmup_steps,
+            T_max=cosine_T_max,
             eta_min=self.min_lr
         )
         

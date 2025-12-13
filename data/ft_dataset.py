@@ -17,6 +17,7 @@ duration_setting = {
 def to_mel_fn(wave, mel_fn_args):
     return mel_spectrogram(wave, **mel_fn_args)
 
+
 class FT_Dataset(torch.utils.data.Dataset):
     def __init__(
         self,
@@ -139,6 +140,15 @@ class FT_Dataset(torch.utils.data.Dataset):
         rng.shuffle(self.current_epoch_indices)
 
     def __getitem__(self, idx):
+        # 确保current_epoch_indices已经初始化，如果没有则初始化为顺序索引
+        if not hasattr(self, 'current_epoch_indices') or len(self.current_epoch_indices) == 0:
+            self.current_epoch_indices = list(range(len(self.data)))
+        
+        # 添加边界检查，确保索引不会超出范围
+        if len(self.current_epoch_indices) <= idx % len(self.data):
+            # 如果索引超出范围，重新初始化current_epoch_indices
+            self.current_epoch_indices = list(range(len(self.data)))
+        
         # 使用当前epoch的打乱索引
         shuffled_idx = self.current_epoch_indices[idx % len(self.data)]
         idx = shuffled_idx
@@ -220,6 +230,9 @@ class FT_Dataset(torch.utils.data.Dataset):
 
 def build_ft_dataloader(data_path, spect_params, sr, batch_size=1, num_workers=0, shuffle=False):
     dataset = FT_Dataset(data_path, spect_params, sr, batch_size)
+    # 如果是训练数据且需要打乱，则设置epoch为0以初始化索引
+    if shuffle:
+        dataset.set_epoch(0)
     dataloader = torch.utils.data.DataLoader(
         dataset,
         batch_size=batch_size,
@@ -229,6 +242,7 @@ def build_ft_dataloader(data_path, spect_params, sr, batch_size=1, num_workers=0
         generator=torch.Generator().manual_seed(1234) if shuffle else None,
     )
     return dataloader
+
 
 def collate(batch):
     batch_size = len(batch)
@@ -256,6 +270,7 @@ def collate(batch):
         wave_lengths[bid] = wave.size(0)
 
     return waves, mels, wave_lengths, mel_lengths
+
 
 if __name__ == "__main__":
     data_path = "./example/reference"
