@@ -647,7 +647,19 @@ class Trainer:
         try:
             # 获取一个样本批次计算初始损失
             sample_batch = next(iter(self.train_dataloader))
-            sample_batch = [b.to(self.device) for b in sample_batch]
+            # 检查sample_batch的结构，确保它是期望的格式
+            if not isinstance(sample_batch, (list, tuple)) or len(sample_batch) < 4:
+                raise ValueError(f"Unexpected batch format: {type(sample_batch)}, length: {len(sample_batch) if isinstance(sample_batch, (list, tuple)) else 'N/A'}")
+            
+            # 检查每个元素是否为张量，如果不是则不进行设备迁移
+            processed_batch = []
+            for i, item in enumerate(sample_batch):
+                if isinstance(item, torch.Tensor):
+                    processed_batch.append(item.to(self.device))
+                else:
+                    # 如果不是张量，保持原样
+                    processed_batch.append(item)
+            sample_batch = processed_batch
                 
             with torch.no_grad():
                 # 解包样本批次
