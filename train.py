@@ -633,7 +633,9 @@ class Trainer:
             print("未找到教师模型检查点，将不使用知识蒸馏")        
     def _compute_initial_loss_scaling_factors(self):
         """计算初始损失缩放因子，使各损失组件按指定比例调整"""
-            
+        if self.iters > 0:
+            # 只在任务最开始需要算起始 缩放因子 和 初始 总 loss 。断点续训练，都是继承的 值。
+            return    
         print("计算初始损失缩放因子...")
             
         # 临时设置模型为评估模式以计算初始损失

@@ -220,7 +220,9 @@ class Trainer:
     
     def _compute_initial_loss_scaling_factors(self):
         """计算初始损失缩放因子，使各损失组件按指定比例调整"""
-            
+        if self.iters > 0:
+            # 只在任务最开始需要算起始 缩放因子 和 初始 总 loss 。断点续训练，都是继承的 值。
+            return  
         if self.accelerator.is_main_process:
             print("计算初始损失缩放因子...")
             
@@ -1050,9 +1052,7 @@ class Trainer:
         
         print(f"Starting training from epoch {self.epoch}, step {self.iters} At {datetime.datetime.now()}")
         
-        # # 在训练开始前计算初始损失缩放因子（如果启用了蒸馏）
-        # if (self.use_distill_ar or self.use_distill_cfm) and \
-        #    ((self.train_ar and self.use_distill_ar) or (self.train_cfm and self.use_distill_cfm)):
+        # # 在训练开始前计算初始损失缩放因子
         self._compute_initial_loss_scaling_factors()
         
         print(f"Start training with loss: {self.ema_loss}")
