@@ -1525,7 +1525,7 @@ class Trainer:
         num_batches = 0
         
         with torch.no_grad():
-            for batch in self.val_dataloader:
+            for batch in tqdm(self.val_dataloader, desc="Validation Progress"):
                 # Handle both old and new batch formats
                 if len(batch) == 5:
                     waves, mels, wave_lengths, mel_input_length, file_paths = batch
