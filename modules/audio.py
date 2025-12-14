@@ -48,7 +48,7 @@ def mel_spectrogram(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin,
     max_val = torch.max(y)
     if min_val < -1.0 or max_val > 1.0:
         file_info = f" (file: {file_path})" if file_path else ""
-        print(f"Audio signal out of range: min value is {min_val}, max value is {max_val} (recorded in -1.0~1.0){file_info}")
+        print(f"\n Audio signal out of range: min value is {min_val}, max value is {max_val} (recorded in -1.0~1.0){file_info}")
 
     global mel_basis, hann_window  # pylint: disable=global-statement
     if f"{str(sampling_rate)}_{str(fmax)}_{str(y.device)}" not in mel_basis:

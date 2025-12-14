@@ -141,7 +141,7 @@ def mel_spectrogram_torch(
     max_val = torch.max(y)
     if min_val < -1.0 or max_val > 1.0:
         file_info = f" (file: {file_path})" if file_path else ""
-        print(f"Audio signal out of range: min value is {min_val}, max value is {max_val} (recorded in -1.0~1.0){file_info}")
+        print(f"\n Audio signal out of range: min value is {min_val}, max value is {max_val} (recorded in -1.0~1.0){file_info}")
     global mel_basis, hann_window
     dtype_device = str(y.dtype) + "_" + str(y.device)
     fmax_dtype_device = str(fmax) + "_" + dtype_device
