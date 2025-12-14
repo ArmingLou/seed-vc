@@ -14,9 +14,8 @@ duration_setting = {
     "max": 30.0,
 }
 # assume single speaker
-def to_mel_fn(wave, mel_fn_args):
-    return mel_spectrogram(wave, **mel_fn_args)
-
+def to_mel_fn(wave, mel_fn_args, file_path=None):
+    return mel_spectrogram(wave, **mel_fn_args, file_path=file_path)
 
 class FT_Dataset(torch.utils.data.Dataset):
     def __init__(
@@ -223,10 +222,9 @@ class FT_Dataset(torch.utils.data.Dataset):
             return self.__getitem__(deterministic_idx)
 
         wave = torch.from_numpy(speech).float().unsqueeze(0)
-        mel = to_mel_fn(wave, self.mel_fn_args).squeeze(0)
+        mel = to_mel_fn(wave, self.mel_fn_args, wav_path).squeeze(0)  # 传递文件路径给to_mel_fn
 
-        return wave.squeeze(0), mel
-
+        return wave.squeeze(0), mel, wav_path
 
 def build_ft_dataloader(data_path, spect_params, sr, batch_size=1, num_workers=0, shuffle=False):
     dataset = FT_Dataset(data_path, spect_params, sr, batch_size)
@@ -261,16 +259,25 @@ def collate(batch):
 
     mel_lengths = torch.zeros(batch_size).long()
     wave_lengths = torch.zeros(batch_size).long()
+    
+    # Store file paths
+    file_paths = []
 
-    for bid, (wave, mel) in enumerate(batch):
+    for bid, item in enumerate(batch):
+        if len(item) == 3:  # wave, mel, file_path
+            wave, mel, file_path = item
+            file_paths.append(file_path)
+        else:  # wave, mel (backward compatibility)
+            wave, mel = item
+            file_paths.append(None)
+            
         mel_size = mel.size(1)
         mels[bid, :, :mel_size] = mel
         waves[bid, : wave.size(0)] = wave
         mel_lengths[bid] = mel_size
         wave_lengths[bid] = wave.size(0)
 
-    return waves, mels, wave_lengths, mel_lengths
-
+    return waves, mels, wave_lengths, mel_lengths, file_paths
 
 if __name__ == "__main__":
     data_path = "./example/reference"

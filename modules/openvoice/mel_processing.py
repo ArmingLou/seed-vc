@@ -134,13 +134,14 @@ def spec_to_mel_torch(spec, n_fft, num_mels, sampling_rate, fmin, fmax):
 
 
 def mel_spectrogram_torch(
-    y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin, fmax, center=False
+    y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin, fmax, center=False, file_path=None
 ):
-    if torch.min(y) < -1.0:
-        print("min value is ", torch.min(y))
-    if torch.max(y) > 1.0:
-        print("max value is ", torch.max(y))
-
+    # 检查音频信号范围并在超出正常范围时打印文件路径
+    min_val = torch.min(y)
+    max_val = torch.max(y)
+    if min_val < -1.0 or max_val > 1.0:
+        file_info = f" (file: {file_path})" if file_path else ""
+        print(f"Audio signal out of range: min value is {min_val}, max value is {max_val} (recorded in -1.0~1.0){file_info}")
     global mel_basis, hann_window
     dtype_device = str(y.dtype) + "_" + str(y.device)
     fmax_dtype_device = str(fmax) + "_" + dtype_device

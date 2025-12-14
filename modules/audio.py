@@ -42,18 +42,19 @@ mel_basis = {}
 hann_window = {}
 
 
-def mel_spectrogram(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin, fmax, center=False):
-    if torch.min(y) < -1.0:
-        print("min value is ", torch.min(y))
-    if torch.max(y) > 1.0:
-        print("max value is ", torch.max(y))
+def mel_spectrogram(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin, fmax, center=False, file_path=None):
+    # 检查音频信号范围并在超出正常范围时打印文件路径
+    min_val = torch.min(y)
+    max_val = torch.max(y)
+    if min_val < -1.0 or max_val > 1.0:
+        file_info = f" (file: {file_path})" if file_path else ""
+        print(f"Audio signal out of range: min value is {min_val}, max value is {max_val} (recorded in -1.0~1.0){file_info}")
 
     global mel_basis, hann_window  # pylint: disable=global-statement
     if f"{str(sampling_rate)}_{str(fmax)}_{str(y.device)}" not in mel_basis:
         mel = librosa_mel_fn(sr=sampling_rate, n_fft=n_fft, n_mels=num_mels, fmin=fmin, fmax=fmax)
         mel_basis[str(sampling_rate) + "_" + str(fmax) + "_" + str(y.device)] = torch.from_numpy(mel).float().to(y.device)
         hann_window[str(sampling_rate) + "_" + str(y.device)] = torch.hann_window(win_size).to(y.device)
-
     y = torch.nn.functional.pad(
         y.unsqueeze(1), (int((n_fft - hop_size) / 2), int((n_fft - hop_size) / 2)), mode="reflect"
     )

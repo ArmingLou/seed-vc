@@ -782,7 +782,7 @@ class Trainer:
                         # 设置优化器的学习率到检查点中保存的值
                         for param_group in self.optimizer.param_groups:
                             param_group['lr'] = checkpoint_lr
-                        print(f"Set optimizer learning rate to {checkpoint_lr:.2e}")
+                        print(f"Adjusted optimizer learning rate to saved lr:《{checkpoint_lr:.2e}》")
             
             # 如果加载了训练状态，更新相应的属性
             # 注意：这部分逻辑已经在前面从检查点文件中加载状态时处理过了，

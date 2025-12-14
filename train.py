@@ -416,7 +416,7 @@ class Trainer:
             if self.need_adjust_current_lr and self.adjusted_current_lr is not None:
                 for param_group in self.optimizer.optimizers['cfm'].param_groups:
                     param_group['lr'] = self.adjusted_current_lr
-                print(f"Adjusted optimizer learning rate to saved lr: {self.adjusted_current_lr}")
+                print(f"Adjusted optimizer learning rate to saved lr: 《{self.adjusted_current_lr}》")
             
             # Ensure deterministic behavior by setting seeds based on current state after loading checkpoint
             seed = 1234 + self.iters
@@ -1119,8 +1119,12 @@ class Trainer:
         self.semantic_fn = semantic_fn
 
     def train_one_step(self, batch):
-        waves, mels, wave_lengths, mel_input_length = batch
-
+        # Handle both old and new batch formats
+        if len(batch) == 5:
+            waves, mels, wave_lengths, mel_input_length, file_paths = batch
+        else:
+            waves, mels, wave_lengths, mel_input_length = batch
+            file_paths = None
         B = waves.size(0)
         target_size = mels.size(2)
         target = mels
