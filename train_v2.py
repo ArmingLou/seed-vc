@@ -893,7 +893,12 @@ class Trainer:
     def validate_one_step(self, batch):
         """在验证集上评估一个批次"""
         with torch.no_grad():
-            waves, mels, wave_lens, mel_lens = batch
+            # Handle both old and new batch formats
+            if len(batch) == 5:
+                waves, mels, wave_lens, mel_lens, file_paths = batch
+            else:
+                waves, mels, wave_lens, mel_lens = batch
+                file_paths = None
             # Resample to 16kHz for ASR models
             waves_16k = torchaudio.functional.resample(waves, self.sr, 16000)
             wave_lengths_16k = (wave_lens.float() * 16000 / self.sr).long()
@@ -959,7 +964,13 @@ class Trainer:
         
         with torch.no_grad():
             for batch in self.val_dataloader:
-                batch = [b.to(self.device) for b in batch]
+                # Handle both old and new batch formats
+                if len(batch) == 5:
+                    waves, mels, wave_lens, mel_lens, file_paths = batch
+                else:
+                    waves, mels, wave_lens, mel_lens = batch
+                    file_paths = None
+                batch = [waves.to(self.device), mels.to(self.device), wave_lens.to(self.device), mel_lens.to(self.device)]
                 loss_result = self.validate_one_step(batch)
                 if isinstance(loss_result, tuple) and len(loss_result) == 3:
                     loss, ar_loss, cfm_loss = loss_result
@@ -1181,8 +1192,12 @@ class Trainer:
 
     def _process_batch(self, epoch, i, batch):
         """Process a single batch"""
-        # Move batch to device
-        waves, mels, wave_lens, mel_lens = batch
+        # Handle both old and new batch formats
+        if len(batch) == 5:
+            waves, mels, wave_lens, mel_lens, file_paths = batch
+        else:
+            waves, mels, wave_lens, mel_lens = batch
+            file_paths = None
         # Resample to 16kHz for ASR models
         waves_16k = torchaudio.functional.resample(waves, self.sr, 16000)
         wave_lengths_16k = (wave_lens.float() * 16000 / self.sr).long()

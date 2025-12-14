@@ -1361,7 +1361,12 @@ class Trainer:
         os.environ['PYTHONHASHSEED'] = str(seed)
             
         with torch.no_grad():
-            waves, mels, wave_lengths, mel_input_length = batch
+            # Handle both old and new batch formats
+            if len(batch) == 5:
+                waves, mels, wave_lengths, mel_input_length, file_paths = batch
+            else:
+                waves, mels, wave_lengths, mel_input_length = batch
+                file_paths = None
             
             B = waves.size(0)
             target_size = mels.size(2)
@@ -1503,7 +1508,13 @@ class Trainer:
         
         with torch.no_grad():
             for batch in self.val_dataloader:
-                batch = [b.to(self.device) for b in batch]
+                # Handle both old and new batch formats
+                if len(batch) == 5:
+                    waves, mels, wave_lengths, mel_input_length, file_paths = batch
+                else:
+                    waves, mels, wave_lengths, mel_input_length = batch
+                    file_paths = None
+                batch = [waves.to(self.device), mels.to(self.device), wave_lengths.to(self.device), mel_input_length.to(self.device)]
                 # 修改返回值处理
                 loss_result = self.validate_one_step(batch)
                 if isinstance(loss_result, tuple) and len(loss_result) == 4:
@@ -1654,7 +1665,15 @@ class Trainer:
             # Also set seed for built-in hash randomization
             os.environ['PYTHONHASHSEED'] = str(seed)
             
-            batch = [b.to(self.device) for b in batch]
+            # Handle both old and new batch formats
+            if len(batch) == 5:
+                waves, mels, wave_lengths, mel_input_length, file_paths = batch
+            else:
+                waves, mels, wave_lengths, mel_input_length = batch
+                file_paths = None
+            batch = [waves.to(self.device), mels.to(self.device), wave_lengths.to(self.device), mel_input_length.to(self.device)]
+            if file_paths is not None:
+                batch.append(file_paths)
             loss = self.train_one_step(batch)
             # 使用指数移动平均计算ema_loss，与train_v2.py保持一致
             if not hasattr(self, 'loss_smoothing_rate'):
