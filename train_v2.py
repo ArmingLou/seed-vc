@@ -235,7 +235,26 @@ class Trainer:
         try:
             # 获取一个样本批次计算初始损失
             sample_batch = next(iter(self.train_dataloader))
-            sample_batch = [b.to(self.device) for b in sample_batch]
+            # 检查sample_batch的结构，确保它是期望的格式
+            if not isinstance(sample_batch, (list, tuple)) or len(sample_batch) < 4:
+                raise ValueError(f"Unexpected batch format: {type(sample_batch)}, length: {len(sample_batch) if isinstance(sample_batch, (list, tuple)) else 'N/A'}")
+            
+            # 检查sample_batch的结构，处理不同格式的批次
+            if len(sample_batch) == 5:
+                # 新格式：waves, mels, wave_lens, mel_lens, file_paths
+                waves, mels, wave_lens, mel_lens, file_paths = sample_batch
+            else:
+                # 旧格式：waves, mels, wave_lens, mel_lens
+                waves, mels, wave_lens, mel_lens = sample_batch
+            
+            # 只对张量元素进行设备迁移
+            waves = waves.to(self.device) if isinstance(waves, torch.Tensor) else waves
+            mels = mels.to(self.device) if isinstance(mels, torch.Tensor) else mels
+            wave_lens = wave_lens.to(self.device) if isinstance(wave_lens, torch.Tensor) else wave_lens
+            mel_lens = mel_lens.to(self.device) if isinstance(mel_lens, torch.Tensor) else mel_lens
+            
+            # 重新组装sample_batch，排除file_paths（如果是新格式）
+            sample_batch = [waves, mels, wave_lens, mel_lens]
             
             with torch.no_grad():
                 # 解包样本批次
@@ -244,12 +263,18 @@ class Trainer:
                 waves_16k = torchaudio.functional.resample(waves, self.sr, 16000)
                 wave_lengths_16k = (wave_lens.float() * 16000 / self.sr).long()
                 
+                # 安全地将张量移动到设备
+                waves_16k_device = waves_16k.to(self.device) if isinstance(waves_16k, torch.Tensor) else waves_16k
+                mels_device = mels.to(self.device) if isinstance(mels, torch.Tensor) else mels
+                wave_lengths_16k_device = wave_lengths_16k.to(self.device) if isinstance(wave_lengths_16k, torch.Tensor) else wave_lengths_16k
+                mel_lens_device = mel_lens.to(self.device) if isinstance(mel_lens, torch.Tensor) else mel_lens
+                
                 # 计算各损失组件的原始值
                 (original_loss_ar, original_logits_ar), (original_loss_cfm, original_logits_cfm) = self.model(
-                    waves_16k.to(self.device),
-                    mels.to(self.device),
-                    wave_lengths_16k.to(self.device),
-                    mel_lens.to(self.device),
+                    waves_16k_device,
+                    mels_device,
+                    wave_lengths_16k_device,
+                    mel_lens_device,
                     forward_ar=self.train_ar,
                     forward_cfm=self.train_cfm,
                 )
@@ -268,11 +293,17 @@ class Trainer:
                     teacher_forward_ar = self.train_ar and self.use_distill_ar
                     teacher_forward_cfm = self.train_cfm and self.use_distill_cfm
                     
+                    # 安全地将张量移动到设备
+                    waves_16k_device = waves_16k.to(self.device) if isinstance(waves_16k, torch.Tensor) else waves_16k
+                    mels_device = mels.to(self.device) if isinstance(mels, torch.Tensor) else mels
+                    wave_lengths_16k_device = wave_lengths_16k.to(self.device) if isinstance(wave_lengths_16k, torch.Tensor) else wave_lengths_16k
+                    mel_lens_device = mel_lens.to(self.device) if isinstance(mel_lens, torch.Tensor) else mel_lens
+                    
                     (teacher_loss_ar, teacher_logits_ar), (teacher_loss_cfm, teacher_logits_cfm) = self.teacher_model(
-                        waves_16k.to(self.device),
-                        mels.to(self.device),
-                        wave_lengths_16k.to(self.device),
-                        mel_lens.to(self.device),
+                        waves_16k_device,
+                        mels_device,
+                        wave_lengths_16k_device,
+                        mel_lens_device,
                         forward_ar=teacher_forward_ar,
                         forward_cfm=teacher_forward_cfm,
                     )
@@ -905,11 +936,17 @@ class Trainer:
 
             # Forward pass and loss calculation
             with self.accelerator.autocast():
+                # 安全地将张量移动到设备
+                waves_16k_device = waves_16k.to(self.device) if isinstance(waves_16k, torch.Tensor) else waves_16k
+                mels_device = mels.to(self.device) if isinstance(mels, torch.Tensor) else mels
+                wave_lengths_16k_device = wave_lengths_16k.to(self.device) if isinstance(wave_lengths_16k, torch.Tensor) else wave_lengths_16k
+                mel_lens_device = mel_lens.to(self.device) if isinstance(mel_lens, torch.Tensor) else mel_lens
+                
                 loss_ar, loss_cfm = self.model(
-                    waves_16k.to(self.device),
-                    mels.to(self.device),
-                    wave_lengths_16k.to(self.device),
-                    mel_lens.to(self.device),
+                    waves_16k_device,
+                    mels_device,
+                    wave_lengths_16k_device,
+                    mel_lens_device,
                     forward_ar=self.train_ar,
                     forward_cfm=self.train_cfm,
                 )
@@ -970,8 +1007,15 @@ class Trainer:
                 else:
                     waves, mels, wave_lens, mel_lens = batch
                     file_paths = None
-                batch = [waves.to(self.device), mels.to(self.device), wave_lens.to(self.device), mel_lens.to(self.device)]
-                loss_result = self.validate_one_step(batch)
+                # 检查batch中每个元素的类型，只对张量进行设备迁移
+                processed_batch = []
+                for item in [waves, mels, wave_lens, mel_lens]:
+                    if isinstance(item, torch.Tensor):
+                        processed_batch.append(item.to(self.device))
+                    else:
+                        processed_batch.append(item)
+                waves, mels, wave_lens, mel_lens = processed_batch
+                loss_result = self.validate_one_step((waves, mels, wave_lens, mel_lens))
                 if isinstance(loss_result, tuple) and len(loss_result) == 3:
                     loss, ar_loss, cfm_loss = loss_result
                 else:
@@ -1214,11 +1258,17 @@ class Trainer:
                 autocast_context = nullcontext()
             
             with autocast_context:
+                # 安全地将张量移动到设备
+                waves_16k_device = waves_16k.to(self.device) if isinstance(waves_16k, torch.Tensor) else waves_16k
+                mels_device = mels.to(self.device) if isinstance(mels, torch.Tensor) else mels
+                wave_lengths_16k_device = wave_lengths_16k.to(self.device) if isinstance(wave_lengths_16k, torch.Tensor) else wave_lengths_16k
+                mel_lens_device = mel_lens.to(self.device) if isinstance(mel_lens, torch.Tensor) else mel_lens
+                
                 (loss_ar, logits_ar), (loss_cfm, logits_cfm) = self.model(
-                    waves_16k.to(self.device),
-                    mels.to(self.device),
-                    wave_lengths_16k.to(self.device),
-                    mel_lens.to(self.device),
+                    waves_16k_device,
+                    mels_device,
+                    wave_lengths_16k_device,
+                    mel_lens_device,
                     forward_ar=self.train_ar,
                     forward_cfm=self.train_cfm,
                 )
@@ -1249,11 +1299,17 @@ class Trainer:
                         teacher_forward_ar = self.train_ar and self.use_distill_ar
                         teacher_forward_cfm = self.train_cfm and self.use_distill_cfm
                         
+                        # 安全地将张量移动到设备
+                        waves_16k_device = waves_16k.to(self.device) if isinstance(waves_16k, torch.Tensor) else waves_16k
+                        mels_device = mels.to(self.device) if isinstance(mels, torch.Tensor) else mels
+                        wave_lengths_16k_device = wave_lengths_16k.to(self.device) if isinstance(wave_lengths_16k, torch.Tensor) else wave_lengths_16k
+                        mel_lens_device = mel_lens.to(self.device) if isinstance(mel_lens, torch.Tensor) else mel_lens
+                        
                         (teacher_loss_ar, teacher_logits_ar), (teacher_loss_cfm, teacher_logits_cfm) = self.teacher_model(
-                            waves_16k.to(self.device),
-                            mels.to(self.device),
-                            wave_lengths_16k.to(self.device),
-                            mel_lens.to(self.device),
+                            waves_16k_device,
+                            mels_device,
+                            wave_lengths_16k_device,
+                            mel_lens_device,
                             forward_ar=teacher_forward_ar,
                             forward_cfm=teacher_forward_cfm,
                         )

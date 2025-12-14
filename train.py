@@ -651,16 +651,22 @@ class Trainer:
             if not isinstance(sample_batch, (list, tuple)) or len(sample_batch) < 4:
                 raise ValueError(f"Unexpected batch format: {type(sample_batch)}, length: {len(sample_batch) if isinstance(sample_batch, (list, tuple)) else 'N/A'}")
             
-            # 检查每个元素是否为张量，如果不是则不进行设备迁移
-            processed_batch = []
-            for i, item in enumerate(sample_batch):
-                if isinstance(item, torch.Tensor):
-                    processed_batch.append(item.to(self.device))
-                else:
-                    # 如果不是张量，保持原样
-                    processed_batch.append(item)
-            sample_batch = processed_batch
-                
+            # 检查sample_batch的结构，处理不同格式的批次
+            if len(sample_batch) == 5:
+                # 新格式：waves, mels, wave_lengths, mel_lengths, file_paths
+                waves, mels, wave_lengths, mel_input_length, file_paths = sample_batch
+            else:
+                # 旧格式：waves, mels, wave_lengths, mel_lengths
+                waves, mels, wave_lengths, mel_input_length = sample_batch
+            
+            # 只对张量元素进行设备迁移
+            waves = waves.to(self.device) if isinstance(waves, torch.Tensor) else waves
+            mels = mels.to(self.device) if isinstance(mels, torch.Tensor) else mels
+            wave_lengths = wave_lengths.to(self.device) if isinstance(wave_lengths, torch.Tensor) else wave_lengths
+            mel_input_length = mel_input_length.to(self.device) if isinstance(mel_input_length, torch.Tensor) else mel_input_length
+            
+            # 重新组装sample_batch，排除file_paths（如果是新格式）
+            sample_batch = [waves, mels, wave_lengths, mel_input_length]                
             with torch.no_grad():
                 # 解包样本批次
                 waves, mels, wave_lengths, mel_input_length = sample_batch
@@ -1526,7 +1532,14 @@ class Trainer:
                 else:
                     waves, mels, wave_lengths, mel_input_length = batch
                     file_paths = None
-                batch = [waves.to(self.device), mels.to(self.device), wave_lengths.to(self.device), mel_input_length.to(self.device)]
+                # 检查batch中每个元素的类型，只对张量进行设备迁移
+                processed_batch = []
+                for item in [waves, mels, wave_lengths, mel_input_length]:
+                    if isinstance(item, torch.Tensor):
+                        processed_batch.append(item.to(self.device))
+                    else:
+                        processed_batch.append(item)
+                batch = processed_batch
                 # 修改返回值处理
                 loss_result = self.validate_one_step(batch)
                 if isinstance(loss_result, tuple) and len(loss_result) == 4:
@@ -1683,7 +1696,14 @@ class Trainer:
             else:
                 waves, mels, wave_lengths, mel_input_length = batch
                 file_paths = None
-            batch = [waves.to(self.device), mels.to(self.device), wave_lengths.to(self.device), mel_input_length.to(self.device)]
+            # 检查batch中每个元素的类型，只对张量进行设备迁移
+            processed_batch = []
+            for item in [waves, mels, wave_lengths, mel_input_length]:
+                if isinstance(item, torch.Tensor):
+                    processed_batch.append(item.to(self.device))
+                else:
+                    processed_batch.append(item)
+            batch = processed_batch
             if file_paths is not None:
                 batch.append(file_paths)
             loss = self.train_one_step(batch)
