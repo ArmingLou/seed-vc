@@ -193,13 +193,19 @@ def main(args):
     if isinstance(converted_audio, torch.Tensor):
         converted_audio = converted_audio.cpu().numpy()
     
+    print(f"原始音频数据形状: {converted_audio.shape}")
+    print(f"原始音频数据类型: {converted_audio.dtype}")
+    print(f"原始音频数据范围: [{converted_audio.min():.6f}, {converted_audio.max():.6f}]")
+    
     # 确保音频数据在一维或二维（立体声）范围内
     if converted_audio.ndim == 1:
         # 单声道音频
         audio_data = converted_audio
+        print("处理为单声道音频")
     elif converted_audio.ndim == 2:
         # 立体声音频，需要转置
         audio_data = converted_audio.T
+        print("处理为立体声音频")
     else:
         print(f"警告: 音频数据维度异常 ({converted_audio.ndim}D)，尝试将其转换为一维")
         audio_data = converted_audio.flatten()
@@ -208,26 +214,64 @@ def main(args):
     if audio_data.dtype != np.float32:
         audio_data = audio_data.astype(np.float32)
     
+    # 检查是否有NaN或Inf值
+    if np.isnan(audio_data).any():
+        print("警告: 音频数据包含NaN值，替换为0")
+        audio_data = np.nan_to_num(audio_data)
+    
+    if np.isinf(audio_data).any():
+        print("警告: 音频数据包含Inf值，替换为有限值")
+        audio_data = np.nan_to_num(audio_data)
+    
     # 归一化到[-1, 1]范围
     if np.abs(audio_data).max() > 1.0:
         audio_data = audio_data / np.abs(audio_data).max()
         print("警告: 音频数据已被归一化到[-1, 1]范围")
     
+    print(f"处理后音频数据形状: {audio_data.shape}")
+    print(f"处理后音频数据类型: {audio_data.dtype}")
+    print(f"处理后音频数据范围: [{audio_data.min():.6f}, {audio_data.max():.6f}]")
+    
     try:
+        print(f"尝试使用float32格式保存音频文件: {output_path}")
         sf.write(output_path, audio_data, save_sr)
         print(f"Voice conversion completed in {end_time - start_time:.2f} seconds")
         print(f"Output saved to: {output_path}")
     except Exception as e:
-        print(f"保存音频文件时出错: {e}")
+        print(f"使用float32格式保存音频文件时出错: {e}")
         # 尝试使用不同的数据类型保存
         try:
+            print(f"尝试使用int16格式保存音频文件: {output_path}")
             audio_data_int16 = (audio_data * 32767).astype(np.int16)
+            print(f"int16数据范围: [{audio_data_int16.min()}, {audio_data_int16.max()}]")
             sf.write(output_path, audio_data_int16, save_sr, subtype='PCM_16')
             print(f"Voice conversion completed in {end_time - start_time:.2f} seconds")
             print(f"Output saved to: {output_path}")
         except Exception as e2:
             print(f"使用int16格式保存音频文件时也出错: {e2}")
-            raise e
+            # 最后的备用方案：尝试创建目录并重新保存
+            try:
+                output_dir = os.path.dirname(output_path)
+                if output_dir and not os.path.exists(output_dir):
+                    os.makedirs(output_dir, exist_ok=True)
+                    print(f"创建输出目录: {output_dir}")
+                
+                # 尝试使用不同的subtype
+                print("尝试使用不同的音频子类型保存")
+                sf.write(output_path, audio_data, save_sr, subtype='FLOAT')
+                print(f"Voice conversion completed in {end_time - start_time:.2f} seconds")
+                print(f"Output saved to: {output_path}")
+            except Exception as e3:
+                print(f"所有保存方法都失败了: {e3}")
+                # 如果所有方法都失败，保存为.npy文件用于调试
+                try:
+                    npy_path = output_path.replace('.wav', '.npy')
+                    np.save(npy_path, audio_data)
+                    print(f"作为备用方案，音频数据已保存为.npy文件: {npy_path}")
+                    print("您可以使用 np.load() 加载此文件进行进一步分析")
+                except Exception as e4:
+                    print(f"连.npy文件保存也失败了: {e4}")
+                raise e
 
 
 if __name__ == "__main__":
