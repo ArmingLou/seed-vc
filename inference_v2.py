@@ -29,6 +29,7 @@ vc_wrapper_v2 = None
 
 def load_v2_models(args):
     """Load V2 models using the wrapper from app.py"""
+    global fp16, dtype
     from hydra.utils import instantiate
     from omegaconf import DictConfig
     # 使用传入的配置文件路径，如果没有指定则使用默认路径
@@ -47,7 +48,6 @@ def load_v2_models(args):
     except Exception as e:
         print(f"警告: 在{device}设备上无法使用{model_dtype}精度加载V2模型: {e}")
         print(f"正在回退到float32精度加载V2模型...")
-        global fp16, dtype
         fp16 = False
         dtype = torch.float32
         model_dtype = torch.float32
@@ -73,7 +73,6 @@ def load_v2_models(args):
         # vc_wrapper.compile_cfm()
 
     return vc_wrapper
-
 # 重新加载模型为float32精度的函数
 def reload_v2_model(vc_wrapper, args):
     """重新加载V2模型为float32精度"""
