@@ -181,7 +181,7 @@ show_help() {
     echo "  -o, --output-dir DIR         指定输出目录 (默认: 输入目录的父目录下，格式为 输入目录名-converted-时间戳)"
     echo "      --v1                     使用V1版本 (默认)"
     echo "      --v2                     使用V2版本"
-    echo "      --gpu                    使用GPU运行 (默认使用CPU)"
+    echo "      --gpu                    使用GPU运行（如果可用）  (默认使用CPU)"
     echo "      --fp16                   使用fp16精度 (默认: false)"
     echo "      --language LANG          指定语言参数 (例如: zh, yue, en)"
     echo ""
@@ -347,16 +347,14 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     fi
     
     # 询问是否使用CPU（仅在非交互模式下未指定时）
-    if [[ -z "$USE_CPU" || "$USE_CPU" = "false" ]]; then
-        read -p "是否使用GPU运行？(y/N): " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            USE_CPU=false
-            echo "已选择使用GPU运行"
-        else
-            USE_CPU=true
-            echo "将使用CPU运行"
-        fi
+    read -p "是否使用GPU运行（如果可用）？(y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        USE_CPU=false
+        echo "已选择使用GPU运行（如果可用）"
+    else
+        USE_CPU=true
+        echo "将使用CPU运行"
     fi
     
     # 选择输入目录（必填）
@@ -574,8 +572,6 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     # 显示CPU使用情况
     if [[ "$USE_CPU" = true ]]; then
         echo "强制使用CPU: 是"
-    elif [[ "$VERSION" = "v2" ]]; then
-        echo "强制使用CPU: 是 (V2版本自动强制在CPU上运行)"
     else
         echo "强制使用CPU: 否（将使用GPU，如果可用）"
     fi

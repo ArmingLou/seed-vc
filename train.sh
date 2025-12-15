@@ -144,7 +144,7 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --gpu|-G)
             USE_CPU=false
-            echo "使用 GPU 运行"
+            echo "使用 GPU 运行（如果可用）"
             shift
             ;;
         --v1)
@@ -304,7 +304,7 @@ while [[ $# -gt 0 ]]; do
         *)
             echo "未知参数: $1"
             echo "用法: $0 [--gpu|-G] [--v1|--v2] [--run-name|-n NAME] [--config|-c CONFIG_PATH] [--dataset-dir|-d DATASET_PATH] [--val-dataset-dir|--val-dir VAL_DATASET_PATH] [--max-steps|-s STEPS] [--max-epochs|-e EPOCHS] [--save-every|-S INTERVAL] [--patience|-p PATIENCE] [--validation-interval|-v INTERVAL] [--train-cfm] [--train-ar] [--distill] [--distill-ar] [--distill-cfm] [--min-lr MIN_LR] [--lr-adjust-interval LR_ADJUST_INTERVAL] [--initial-lr INITIAL_LR] [--warmup-steps WARMUP_STEPS] [--pretrained-ckpt CKPT_PATH] [--pretrained-cfm-ckpt CFM_CKPT_PATH] [--pretrained-ar-ckpt AR_CKPT_PATH]"
-            echo "  --gpu|-G        使用 GPU 运行 (默认使用 CPU)"
+            echo "  --gpu|-G        使用 GPU 运行（如果可用） (默认使用 CPU)"
             echo "  --v1            运行 V1 版本 (默认)"
             echo "  --v2            运行 V2 版本"
             echo "  --run-name|-n   设置运行名称 (默认: Test_ft)"
@@ -371,11 +371,11 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     fi
     
     # 询问是否强制使用 CPU
-    read -p "是否使用 GPU 运行？(y/N): " -n 1 -r
+    read -p "是否使用 GPU 运行（如果可用）？(y/N): " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         USE_CPU=false
-        echo "已启用使用 GPU 运行"
+        echo "已启用使用 GPU 运行（如果可用）"
     else
         USE_CPU=true
         echo "将使用 CPU 运行"

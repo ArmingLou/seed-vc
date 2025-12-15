@@ -80,7 +80,7 @@ show_help() {
     echo "  -v, --vc              运行语音转换 Web UI (默认)"
     echo "  -s, --svc             运行歌声转换 Web UI"
     echo "  -2, --v2              运行 V2 模型 Web UI"
-    echo "  -G, --gpu             使用 GPU 运行 (默认使用 CPU)"
+    echo "  -G, --gpu             使用 GPU 运行（如果可用） (默认使用 CPU)"
     echo "  -p, --checkpoint PATH 指定模型检查点路径"
     echo "  -c, --config PATH     指定模型配置文件路径"
     echo "  -m, --cfm-checkpoint PATH 指定 CFM 模型检查点路径 (仅 V2)"
@@ -97,7 +97,7 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         -G|--gpu)
             USE_CPU=false
-            echo "使用 GPU 运行"
+            echo "使用 GPU 运行（如果可用）"
             shift
             ;;
         -v|--vc)
@@ -194,11 +194,11 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     fi
     
     # 询问是否强制使用 CPU
-    read -p "是否使用 GPU 运行？(y/N): " -n 1 -r
+    read -p "是否使用 GPU 运行（如果可用）？(y/N): " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         USE_CPU=false
-        echo "已启用使用 GPU 运行"
+        echo "已启用使用 GPU 运行（如果可用）"
     else
         USE_CPU=true
         echo "将使用 CPU 运行"
