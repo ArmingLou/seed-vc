@@ -1187,7 +1187,7 @@ class Trainer:
                     val_loss = self.validate()
                     if val_loss is not None:
                         if self.accelerator.is_main_process:
-                            print(f"\nValidation loss at step {self.iters}:【{val_loss}】/「{self.ema_loss}」loss")
+                            print(f"\nValidation loss at step {self.iters}: val_loss【{val_loss}】/「{self.ema_loss}」loss")
                         
                         # 早停机制
                         if val_loss < self.best_val_loss:
