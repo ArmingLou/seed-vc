@@ -1213,7 +1213,7 @@ class Trainer:
                                 # 不再在早停时强制保存最佳模型，因为在训练过程中已经保存过了
                                 # self._save_best_model()
                                 return
-                
+                    
                 if self.iters >= self.max_steps and self.accelerator.is_main_process:
                     print("\nReached max steps, stopping training")
                     self._save_checkpoint(self.epoch)
@@ -1221,7 +1221,10 @@ class Trainer:
                     self.training_completed = True
                     exit() # 无需归档，直接退出。只保存当前检查点
                 
-                
+                # Save checkpoint
+                if self.iters % self.save_interval == 0 and self.accelerator.is_main_process:
+                    self._save_checkpoint(self.epoch)
+                    
                 # 检查是否应该早停
                 if self.should_stop:
                     break
@@ -1484,9 +1487,6 @@ class Trainer:
         # Log training progress
         self._log_training_progress(epoch, i, loss_total, scaled_loss_ar, scaled_loss_cfm, grad_norm_g, scaled_distill_cfm_loss, scaled_distill_ar_loss, distill_cfm_loss, distill_ar_loss)
 
-        # Save checkpoint
-        if self.iters % self.save_interval == 0 and self.accelerator.is_main_process:
-            self._save_checkpoint(epoch)
 
     def _fallback_to_fp32(self):
         """Fallback from fp16 to fp32 training"""
