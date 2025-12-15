@@ -925,6 +925,10 @@ run_with_logging() {
     # 默认始终在控制台显示日志
     # 只有当指定了日志文件路径且不为空时才同时保存到文件
     if [[ -n "$LOG_FILE" && "$LOG_FILE" != "" ]]; then
+        # 确保日志文件的目录存在
+        LOG_DIR=$(dirname "$LOG_FILE")
+        mkdir -p "$LOG_DIR"
+        
         # 使用 stdbuf 强制所有输出使用行缓冲 (-oL) 或完全无缓冲 (-o0)
         # 我们这里使用行缓冲 (-oL)，因为它对性能影响最小，且能解决实时性问题
         # 将 stdbuf 应用到 tee 上游的命令，以及 tee 内部的 awk 上
