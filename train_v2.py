@@ -1188,8 +1188,7 @@ class Trainer:
                     if val_loss is not None:
                         if self.accelerator.is_main_process:
                             print(f"\nValidation loss at step {self.iters}: val_loss【{val_loss}】/「{self.ema_loss}」loss")
-                        
-                        # 早停机制
+                        # 在预热阶段结束后，根据验证损失情况决定是否手动调整学习率
                         if val_loss < self.best_val_loss:
                             self.best_val_loss = val_loss
                             self.patience_counter = 0
@@ -1213,6 +1212,23 @@ class Trainer:
                                 # 不再在早停时强制保存最佳模型，因为在训练过程中已经保存过了
                                 # self._save_best_model()
                                 return
+                        
+                        # 当patience_counter达到一定阈值时，手动降低学习率
+                        # 每当patience_counter增加时，按0.5的比例降低学习率
+                        switch_patience = max(1, self.patience // 4)  # 使用早停耐心值的四分之一作为切换耐心值
+                        if self.patience_counter >= switch_patience and self.patience_counter < self.patience and self.patience_counter % max(2, switch_patience) == 0:
+                            # 获取当前学习率并降低它
+                            current_lr = self.optimizer.param_groups[0]['lr']
+                            new_lr = max(current_lr * 0.5, self.min_lr)
+                            
+                            # 手动设置新的学习率
+                            for param_group in self.optimizer.param_groups:
+                                param_group['lr'] = new_lr
+                            
+                            print(f"Learning rate manually adjusted from {current_lr:.2e} to 《{new_lr:.2e}》 based on validation loss plateau")
+                        else:
+                            new_lr = self.optimizer.param_groups[0]['lr']
+                            print(f"Learning rate remains at 《{new_lr:.2e}》 (cosine annealing phase - validation loss monitoring)")       
                     
                 if self.iters >= self.max_steps and self.accelerator.is_main_process:
                     print("\nReached max steps, stopping training")
@@ -1457,33 +1473,6 @@ class Trainer:
         
         self.optimizer.zero_grad()
 
-        # 每隔一定step打印学习率信息
-        if self.iters % self.lr_adjust_interval == 0 and self.accelerator.is_main_process:
-            # 获取当前使用的学习率调度器的学习率
-            if self.iters < self.warmup_steps:
-                # 预热阶段使用预热调度器的学习率
-                cur_lr = self.warmup_scheduler.get_last_lr()[0]
-            else:
-                # 余弦退火阶段使用余弦调度器的学习率
-                cur_lr = self.cosine_scheduler.get_last_lr()[0]
-            print(f"Learning rate at step {self.iters}: 《{cur_lr:.2e}》")
-            
-            # 在预热阶段结束后，根据验证损失情况决定是否手动调整学习率
-            if self.iters >= self.warmup_steps and self.val_dataloader:
-                # 当patience_counter达到一定阈值时，手动降低学习率
-                # 每当patience_counter增加时，按0.5的比例降低学习率
-                switch_patience = max(1, self.patience // 4)  # 使用早停耐心值的四分之一作为切换耐心值
-                if self.patience_counter >= switch_patience and self.patience_counter < self.patience and self.patience_counter % max(2, switch_patience) == 0:
-                    # 获取当前学习率并降低它
-                    current_lr = self.optimizer.param_groups[0]['lr']
-                    new_lr = max(current_lr * 0.5, self.min_lr)
-                    
-                    # 手动设置新的学习率
-                    for param_group in self.optimizer.param_groups:
-                        param_group['lr'] = new_lr
-                    
-                    print(f"Learning rate manually adjusted from {current_lr:.2e} to 《{new_lr:.2e}》 based on validation loss plateau")
-
         # Log training progress
         self._log_training_progress(epoch, i, loss_total, scaled_loss_ar, scaled_loss_cfm, grad_norm_g, scaled_distill_cfm_loss, scaled_distill_ar_loss, distill_cfm_loss, distill_ar_loss)
 
@@ -1579,10 +1568,10 @@ class Trainer:
                     loss_cfm_val = loss_cfm.item()
                 else:
                     loss_cfm_val = loss_cfm
-                    
+                print(f"Learning rate at step {self.iters}: 《{cur_lr:.2e}》")
                 print("Epoch %d, Step %d, Iteration %d, loss: 「%.4f」, Loss AR: %.4f, Loss CFM: %.4f, Loss Distill: %.4f, Grad Norm: %.4f, LR: %.6f"
                       % (epoch, self.iters, i, total_training_loss, loss_ar_val, loss_cfm_val, distill_loss, grad_norm_g, cur_lr))
-                
+               
     def _save_checkpoint(self, epoch):
         """Save model checkpoint"""
         print('Saving checkpoint...')
