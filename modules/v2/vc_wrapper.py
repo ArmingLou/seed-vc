@@ -313,8 +313,6 @@ class VoiceConversionWrapper(torch.nn.Module):
             # 如果需要加载完整训练状态
             if load_training_state :
                 training_state.update(ar_checkpoint)
-            else:
-                print("Warning: Training state not found in AR checkpoint. Starting from scratch.")
             
             # 检查检查点是否包含AR部分
             if 'ar' not in ar_checkpoint.get("net", {}):
