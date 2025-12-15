@@ -118,7 +118,7 @@ DISTILL=0.0
 DISTILL_AR=0.0
 DISTILL_CFM=0.0
 MIN_LR=1e-7
-LR_ADJUST_INTERVAL=10
+L0SS_LOG_INTERVAL=10
 INITIAL_LR=1e-5 # batch×2 → lr÷4 目前粤语如果batch size 8 。声调敏感学习率更低用1e-5
 WARMUP_STEPS=100 # batch×2 → steps÷2 总样本数的4%左右
 RESUME_LR=0.0 # 恢复训练时的学习率，默认为0.0表示使用检查点中的学习率
@@ -241,9 +241,9 @@ while [[ $# -gt 0 ]]; do
             echo "设置最小学习率: $MIN_LR"
             shift 2
             ;;
-        --lr-adjust-interval)
-            LR_ADJUST_INTERVAL="$2"
-            echo "设置学习率调整日志打印间隔step: $LR_ADJUST_INTERVAL"
+        --loss-log-interval)
+            L0SS_LOG_INTERVAL="$2"
+            echo "loss日志打印间隔step: $L0SS_LOG_INTERVAL"
             shift 2
             ;;
         --initial-lr)
@@ -303,7 +303,7 @@ while [[ $# -gt 0 ]]; do
 
         *)
             echo "未知参数: $1"
-            echo "用法: $0 [--gpu|-G] [--v1|--v2] [--run-name|-n NAME] [--config|-c CONFIG_PATH] [--dataset-dir|-d DATASET_PATH] [--val-dataset-dir|--val-dir VAL_DATASET_PATH] [--max-steps|-s STEPS] [--max-epochs|-e EPOCHS] [--save-every|-S INTERVAL] [--patience|-p PATIENCE] [--validation-interval|-v INTERVAL] [--train-cfm] [--train-ar] [--distill] [--distill-ar] [--distill-cfm] [--min-lr MIN_LR] [--lr-adjust-interval LR_ADJUST_INTERVAL] [--initial-lr INITIAL_LR] [--warmup-steps WARMUP_STEPS] [--pretrained-ckpt CKPT_PATH] [--pretrained-cfm-ckpt CFM_CKPT_PATH] [--pretrained-ar-ckpt AR_CKPT_PATH]"
+            echo "用法: $0 [--gpu|-G] [--v1|--v2] [--run-name|-n NAME] [--config|-c CONFIG_PATH] [--dataset-dir|-d DATASET_PATH] [--val-dataset-dir|--val-dir VAL_DATASET_PATH] [--max-steps|-s STEPS] [--max-epochs|-e EPOCHS] [--save-every|-S INTERVAL] [--patience|-p PATIENCE] [--validation-interval|-v INTERVAL] [--train-cfm] [--train-ar] [--distill] [--distill-ar] [--distill-cfm] [--min-lr MIN_LR] [--loss-log-interval L0SS_LOG_INTERVAL] [--initial-lr INITIAL_LR] [--warmup-steps WARMUP_STEPS] [--pretrained-ckpt CKPT_PATH] [--pretrained-cfm-ckpt CFM_CKPT_PATH] [--pretrained-ar-ckpt AR_CKPT_PATH]"
             echo "  --gpu|-G        使用 GPU 运行（如果可用） (默认使用 CPU)"
             echo "  --v1            运行 V1 版本 (默认)"
             echo "  --v2            运行 V2 版本"
@@ -324,7 +324,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --distill-cfm   设置 CFM 模型知识蒸馏权重 (V2版本，默认: 0.0)"
             
             echo "  --min-lr        设置最小学习率 (默认: 1e-7)"
-            echo "  --lr-adjust-interval 设置学习率调整间隔 (默认: 10)"
+            echo "  --loss-log-interval  设置loss打印间隔 (默认: 10)"
             echo "  --initial-lr    设置初始学习率 (默认: 4e-5)"
             echo "  --warmup-steps  设置预热步数 (默认: 50)"
             echo "  --resume-lr     设置恢复学习率 (默认: 0.0)"
@@ -569,13 +569,13 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     fi
     echo "最小学习率: $MIN_LR"
     
-    read -p "设置学习率调整日志打印间隔step (默认: 10): " lr_adjust_interval_input
+    read -p "设置loss日志打印间隔step (默认: 10): " lr_adjust_interval_input
     if [[ -n "$lr_adjust_interval_input" ]]; then
-        LR_ADJUST_INTERVAL="$lr_adjust_interval_input"
+        L0SS_LOG_INTERVAL="$lr_adjust_interval_input"
     else
-        LR_ADJUST_INTERVAL=10
+        L0SS_LOG_INTERVAL=10
     fi
-    echo "学习率调整间隔: $LR_ADJUST_INTERVAL"
+    echo "loss打印间隔（step）: $L0SS_LOG_INTERVAL"
     
     read -p "请输入初始学习率 (默认: 4e-5): " initial_lr_input
     if [[ -n "$initial_lr_input" ]]; then
@@ -756,7 +756,7 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     
     # 显示学习率相关参数
     echo "最小学习率: $MIN_LR"
-    echo "学习率调整日志打印间隔step: $LR_ADJUST_INTERVAL"
+    echo "loss日志打印间隔step: $L0SS_LOG_INTERVAL"
     echo "初始学习率: $INITIAL_LR"
     echo "预热步数: $WARMUP_STEPS"
     echo "恢复学习率: $RESUME_LR"
@@ -830,8 +830,8 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
         CMD+=" --language $LANGUAGE"
     fi
     
-    # if [[ "$LR_ADJUST_INTERVAL" != "50" ]]; then
-        CMD+=" --lr-adjust-interval $LR_ADJUST_INTERVAL"
+    # if [[ "$L0SS_LOG_INTERVAL" != "50" ]]; then
+        CMD+=" --loss-log-interval $L0SS_LOG_INTERVAL"
     # fi
     
     # if [[ "$MAX_EPOCHS" != "1000" ]]; then
@@ -967,7 +967,7 @@ if [ "$VERSION" = "v1" ]; then
         --patience $PATIENCE \
         --validation-interval $VALIDATION_INTERVAL \
         --min-lr $MIN_LR \
-        --lr-adjust-interval $LR_ADJUST_INTERVAL \
+        --loss-log-interval $L0SS_LOG_INTERVAL \
         --initial-lr $INITIAL_LR \
         --warmup-steps $WARMUP_STEPS \
         --resume-lr $RESUME_LR"
@@ -1026,7 +1026,7 @@ else
     # 添加学习率相关参数
     
     V2_TRAIN_ARGS+=" --min-lr $MIN_LR"
-    V2_TRAIN_ARGS+=" --lr-adjust-interval $LR_ADJUST_INTERVAL"
+    V2_TRAIN_ARGS+=" --loss-log-interval $L0SS_LOG_INTERVAL"
     V2_TRAIN_ARGS+=" --initial-lr $INITIAL_LR"
     V2_TRAIN_ARGS+=" --warmup-steps $WARMUP_STEPS"
     V2_TRAIN_ARGS+=" --resume-lr $RESUME_LR"

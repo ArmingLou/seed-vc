@@ -49,7 +49,7 @@ class Trainer:
             patience=20,
             validation_interval=50,
             min_lr=1e-7,
-            lr_adjust_interval=50,
+            loss_log_interval=50,
             initial_lr=1e-5,
             warmup_steps=1000,
             # 添加新的知识蒸馏参数
@@ -147,7 +147,7 @@ class Trainer:
         # 学习率调度相关参数
         self.initial_lr = initial_lr  # 初始学习率
         self.min_lr = min_lr      # 最小学习率
-        self.lr_adjust_interval = lr_adjust_interval  # 学习率调整间隔
+        self.loss_log_interval = loss_log_interval  
         self.warmup_steps = warmup_steps  # 学习率预热步数
         self.best_train_loss = float('inf')  # 用于学习率调度的最佳训练损失
         self.switched_to_val_scheduler = False  # 学习率调度器切换状态
@@ -180,7 +180,7 @@ class Trainer:
         # 训练状态参数
         self.iters = 0
         self.epoch = 0
-        self.log_interval = lr_adjust_interval
+        self.log_interval = loss_log_interval
         self.max_steps = steps
         self.save_interval = save_interval
         self.max_epochs = max_epochs
@@ -1710,7 +1710,7 @@ def main(args):
         patience=args.patience,
         validation_interval=args.validation_interval,
         min_lr=args.min_lr,
-        lr_adjust_interval=args.lr_adjust_interval,
+        loss_log_interval=args.loss_log_interval,
         initial_lr=args.initial_lr,
         warmup_steps=args.warmup_steps,
         resume_lr=args.resume_lr,
@@ -1761,7 +1761,7 @@ if __name__ == '__main__':
     
     # 学习率调度参数
     parser.add_argument('--min-lr', type=float, default=1e-7, help='Minimum learning rate')
-    parser.add_argument('--lr-adjust-interval', type=int, default=50, help='Interval (in steps) for learning rate adjustment print logs')
+    parser.add_argument('--loss-log-interval', type=int, default=50, help='Interval (in steps) for loss print logs')
     parser.add_argument('--initial-lr', type=float, default=1e-5, help='Initial learning rate')
     parser.add_argument('--warmup-steps', type=int, default=1000, help='Number of warmup steps')
     parser.add_argument('--resume-lr', type=float, default=0.0, help='Resume learning rate for resuming training from checkpoint')
