@@ -1336,6 +1336,12 @@ class Trainer:
                 # 如果有教师模型，添加知识蒸馏损失
                 
                 if self.teacher_model is not None:
+                    
+                    # 使用与学生模型相同的随机种子
+                    torch.set_rng_state(torch_rng_state)
+                    if cuda_rng_state is not None:
+                        torch.cuda.set_rng_state(cuda_rng_state)
+                        
                     # 确保教师模型处于评估模式
                     self.teacher_model.eval()
                     # 添加额外的检查，确保教师模型确实处于评估模式
@@ -1351,11 +1357,6 @@ class Trainer:
                                 module.eval()
                     
                     check_and_set_eval(self.teacher_model, "教师模型")
-                    
-                    # 使用与学生模型相同的随机种子
-                    torch.set_rng_state(torch_rng_state)
-                    if cuda_rng_state is not None:
-                        torch.cuda.set_rng_state(cuda_rng_state)
                     
                     with torch.no_grad():
                         # 使用教师模型生成目标输出

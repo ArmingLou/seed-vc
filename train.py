@@ -1255,6 +1255,11 @@ class Trainer:
         distill_loss = torch.tensor(0.0, device=self.device)
         teacher_output = None
         if self.teacher_model is not None and self.use_distill:
+            # 使用与学生模型相同的随机种子
+            torch.set_rng_state(torch_rng_state)
+            if cuda_rng_state is not None:
+                torch.cuda.set_rng_state(cuda_rng_state)
+                
             # 确保教师模型处于评估模式
             _ = [self.teacher_model[key].eval() for key in self.teacher_model]
             # 添加额外的检查，确保教师模型的所有模块都处于评估模式
@@ -1266,11 +1271,6 @@ class Trainer:
             
             for key in self.teacher_model:
                 check_and_set_eval(self.teacher_model[key], f"教师模型 {key}")
-            
-            # 使用与学生模型相同的随机种子
-            torch.set_rng_state(torch_rng_state)
-            if cuda_rng_state is not None:
-                torch.cuda.set_rng_state(cuda_rng_state)
             
             with torch.no_grad():
                 # 使用教师模型生成目标输出
