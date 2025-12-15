@@ -1706,15 +1706,13 @@ def main(args):
         
     # 统一使用Trainer进行训练，无论是否启用知识蒸馏
     # 使用数据集目录名作为后缀，保持一致的输出目录结构
-    dataset_name = os.path.basename(os.path.normpath(args.dataset_dir))
-    version_run_name = f"{args.run_name}_{dataset_name}"
     
     trainer = Trainer(
         config_path=args.config,
         pretrained_cfm_ckpt_path=args.pretrained_cfm_ckpt,
         pretrained_ar_ckpt_path=args.pretrained_ar_ckpt,
         data_dir=args.dataset_dir,
-        run_name=version_run_name,
+        run_name=args.run_name,
         batch_size=args.batch_size,
         steps=args.max_steps,
         max_epochs=args.max_epochs,
