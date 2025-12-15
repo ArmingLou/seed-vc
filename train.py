@@ -187,13 +187,16 @@ class Trainer:
             assert os.path.exists(pretrained_ckpt_path), f"Pretrained checkpoint {pretrained_ckpt_path} not found"
             latest_checkpoint = pretrained_ckpt_path
             # 根据是否有教师模型路径来判断检查点类型
-            if teacher_model_path is not None:
+            if self.use_distill:
                 self.checkpoint_type = "teacher"
             else:
                 self.checkpoint_type = "pretrained"
         elif config.get('pretrained_model', ''):
             latest_checkpoint = load_custom_model_from_hf("Plachta/Seed-VC", config['pretrained_model'], None)
-            self.checkpoint_type = "pretrained"
+            if self.use_distill:
+                self.checkpoint_type = "teacher"
+            else:
+                self.checkpoint_type = "pretrained"
         else:
             latest_checkpoint = ""
             self.checkpoint_type = "none"
