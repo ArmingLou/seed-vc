@@ -4,6 +4,7 @@ import torch
 import yaml
 import soundfile as sf
 import time
+import numpy as np
 from modules.commons import str2bool
 
 # Set up device and torch configurations
@@ -187,10 +188,46 @@ def main(args):
 
     output_path = os.path.join(args.output, filename)
     save_sr, converted_audio = converted_audio
-    sf.write(output_path, converted_audio, save_sr)
-
-    print(f"Voice conversion completed in {end_time - start_time:.2f} seconds")
-    print(f"Output saved to: {output_path}")
+    
+    # 确保音频数据是numpy数组并且是正确的数据类型
+    if isinstance(converted_audio, torch.Tensor):
+        converted_audio = converted_audio.cpu().numpy()
+    
+    # 确保音频数据在一维或二维（立体声）范围内
+    if converted_audio.ndim == 1:
+        # 单声道音频
+        audio_data = converted_audio
+    elif converted_audio.ndim == 2:
+        # 立体声音频，需要转置
+        audio_data = converted_audio.T
+    else:
+        print(f"警告: 音频数据维度异常 ({converted_audio.ndim}D)，尝试将其转换为一维")
+        audio_data = converted_audio.flatten()
+    
+    # 确保数据类型为float32并且在[-1, 1]范围内
+    if audio_data.dtype != np.float32:
+        audio_data = audio_data.astype(np.float32)
+    
+    # 归一化到[-1, 1]范围
+    if np.abs(audio_data).max() > 1.0:
+        audio_data = audio_data / np.abs(audio_data).max()
+        print("警告: 音频数据已被归一化到[-1, 1]范围")
+    
+    try:
+        sf.write(output_path, audio_data, save_sr)
+        print(f"Voice conversion completed in {end_time - start_time:.2f} seconds")
+        print(f"Output saved to: {output_path}")
+    except Exception as e:
+        print(f"保存音频文件时出错: {e}")
+        # 尝试使用不同的数据类型保存
+        try:
+            audio_data_int16 = (audio_data * 32767).astype(np.int16)
+            sf.write(output_path, audio_data_int16, save_sr, subtype='PCM_16')
+            print(f"Voice conversion completed in {end_time - start_time:.2f} seconds")
+            print(f"Output saved to: {output_path}")
+        except Exception as e2:
+            print(f"使用int16格式保存音频文件时也出错: {e2}")
+            raise e
 
 
 if __name__ == "__main__":
