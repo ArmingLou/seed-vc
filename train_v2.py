@@ -1583,10 +1583,6 @@ class Trainer:
                 print("Epoch %d, Step %d, Iteration %d, loss: 「%.4f」, Loss AR: %.4f, Loss CFM: %.4f, Loss Distill: %.4f, Grad Norm: %.4f, LR: %.6f"
                       % (epoch, self.iters, i, total_training_loss, loss_ar_val, loss_cfm_val, distill_loss, grad_norm_g, cur_lr))
                 
-                # 如果有验证集，也打印验证相关信息
-                if self.val_dataloader:
-                    print(f"  Best val loss: {self.best_val_loss:.4f}, Patience: {self.patience_counter}/{self.patience}")
-
     def _save_checkpoint(self, epoch):
         """Save model checkpoint"""
         print('Saving checkpoint...')
