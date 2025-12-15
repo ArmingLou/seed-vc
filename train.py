@@ -729,11 +729,10 @@ class Trainer:
                     
                 # deterministically set a length as prompt
                 # Generate deterministic random-like values based on current iteration
-                torch.manual_seed(0)
+                # torch.manual_seed(self.iters)
                 prompt_len_max = target_lengths - 1
                 prompt_len = (torch.rand([B], device=alt_cond.device) * prompt_len_max).floor().long()
-                prompt_len[torch.rand([B], device=alt_cond.device) < 0.1] = 0
-                    
+                prompt_len[torch.rand([B], device=alt_cond.device) < 0.1] = 0                    
                 # for prompt cond token, use ori_cond instead of alt_cond
                 cond = alt_cond.clone()
                 for bib in range(B):
@@ -777,6 +776,7 @@ class Trainer:
                         y_list.append(y)
                 y = torch.cat(y_list, dim=0)
                     
+                # 先调用学生模型（使用当前的随机种子）
                 # 为了确保教师模型和学生模型使用相同的随机种子，我们需要固定随机种子
                 # 保存当前的随机种子状态
                 torch_rng_state = torch.get_rng_state()
@@ -784,19 +784,7 @@ class Trainer:
                 if torch.cuda.is_available():
                     cuda_rng_state = torch.cuda.get_rng_state()
                 
-                # 设置固定的随机种子以确保一致性
-                torch.manual_seed(0)
-                if torch.cuda.is_available():
-                    torch.cuda.manual_seed(0)
-                
-                # 计算各损失组件的原始值
-                original_loss, student_output = self.model.cfm(x, target_lengths, prompt_len, cond, y)
-                
-                # 重置随机种子以确保教师模型使用相同的随机数序列
-                torch.manual_seed(0)
-                if torch.cuda.is_available():
-                    torch.cuda.manual_seed(0)
-                
+                original_loss, student_output = self.model.cfm(x, target_lengths, prompt_len, cond, y)                
                 # 计算承诺损失和码本损失
                 original_alt_commitment_loss = alt_commitment_loss
                 original_ori_commitment_loss = ori_commitment_loss
@@ -807,6 +795,11 @@ class Trainer:
                 original_distill_loss = torch.tensor(0.0, device=self.device)
                 teacher_output = None
                 if self.teacher_model is not None and self.use_distill:
+                    # 使用与学生模型相同的随机种子
+                    torch.set_rng_state(torch_rng_state)
+                    if cuda_rng_state is not None:
+                        torch.cuda.set_rng_state(cuda_rng_state)
+                    
                     with torch.no_grad():
                         # 使用教师模型生成目标输出
                         teacher_loss, teacher_output = self.teacher_model.cfm(x, target_lengths, prompt_len, cond, y)
@@ -1201,7 +1194,7 @@ class Trainer:
 
         # deterministically set a length as prompt
         # Generate deterministic random-like values based on current iteration
-        torch.manual_seed(self.iters)
+        # torch.manual_seed(self.iters)
         prompt_len_max = target_lengths - 1
         prompt_len = (torch.rand([B], device=alt_cond.device) * prompt_len_max).floor().long()
         prompt_len[torch.rand([B], device=alt_cond.device) < 0.1] = 0
@@ -1256,18 +1249,8 @@ class Trainer:
         if torch.cuda.is_available():
             cuda_rng_state = torch.cuda.get_rng_state()
         
-        # 设置固定的随机种子以确保一致性
-        torch.manual_seed(0)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed(0)
-        
-        loss, student_output = self.model.cfm(x, target_lengths, prompt_len, cond, y)
-        
-        # 重置随机种子以确保教师模型使用相同的随机数序列
-        torch.manual_seed(0)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed(0)
-
+        # 先调用学生模型（使用当前的随机种子）
+        loss, student_output = self.model.cfm(x, target_lengths, prompt_len, cond, y)        
         # 如果有教师模型，添加知识蒸馏损失
         distill_loss = torch.tensor(0.0, device=self.device)
         teacher_output = None
@@ -1284,17 +1267,16 @@ class Trainer:
             for key in self.teacher_model:
                 check_and_set_eval(self.teacher_model[key], f"教师模型 {key}")
             
-            with torch.no_grad():
-                # 使用教师模型生成目标输出
-                teacher_loss, teacher_output = self.teacher_model.cfm(x, target_lengths, prompt_len, cond, y)
-            
-            # 恢复之前的随机种子状态
+            # 使用与学生模型相同的随机种子
             torch.set_rng_state(torch_rng_state)
             if cuda_rng_state is not None:
                 torch.cuda.set_rng_state(cuda_rng_state)
             
-            # 计算学生模型和教师模型输出之间的蒸馏损失
-            # 确保student_output和teacher_output都是张量且形状匹配
+            with torch.no_grad():
+                # 使用教师模型生成目标输出
+                teacher_loss, teacher_output = self.teacher_model.cfm(x, target_lengths, prompt_len, cond, y)
+            
+            # 计算学生模型和教师模型输出之间的蒸馏损失            # 确保student_output和teacher_output都是张量且形状匹配
             if isinstance(student_output, list):
                 # 如果是列表，取第一个元素
                 student_output = student_output[0] if student_output else torch.tensor(0.0, device=self.device)
@@ -1317,12 +1299,8 @@ class Trainer:
                 # 使用KL散度计算蒸馏损失，添加温度参数支持
                 distill_loss = self.compute_kl_distill_loss(student_output_adj, teacher_output_adj.detach(), temperature=self.distill_temperature)
         else:
-            # 恢复之前的随机种子状态
-            torch.set_rng_state(torch_rng_state)
-            if cuda_rng_state is not None:
-                torch.cuda.set_rng_state(cuda_rng_state)
-        
-        # 计算各损失组件
+            pass
+                # 计算各损失组件
         # 使用动态损失平衡机制，根据初始化时计算的缩放因子调整各损失组件
         
         self.loss_scaling_factors, loss_total, scaled_main_loss, commitment_loss_component, codebook_loss_component, distill_loss_component = self._compute_loss_and_dynamic_loss_scaling_factors(loss, ori_commitment_loss,alt_commitment_loss, ori_codebook_loss, alt_codebook_loss, distill_loss)
@@ -1443,7 +1421,7 @@ class Trainer:
                 ori_codebook_loss = torch.tensor(0.0, device=self.device)            
             # deterministically set a length as prompt
             # Generate deterministic random-like values based on current iteration
-            torch.manual_seed(self.iters)
+            # torch.manual_seed(self.iters)
             prompt_len_max = target_lengths - 1
             prompt_len = (torch.rand([B], device=alt_cond.device) * prompt_len_max).floor().long()
             prompt_len[torch.rand([B], device=alt_cond.device) < 0.1] = 0
@@ -1788,11 +1766,6 @@ class Trainer:
         start_epoch = self.epoch
         print(f"Starting training from epoch {start_epoch}, step {self.iters} At {datetime.datetime.now()}")
         
-        # 计算初始损失缩放因子
-        self._compute_initial_loss_scaling_factors()
-        
-        print(f"Start training with loss: {self.ema_loss}")
-        
         # Ensure deterministic behavior by setting seeds based on current state
         seed = 1234 + self.iters
         random.seed(seed)
@@ -1804,6 +1777,11 @@ class Trainer:
         
         # Also set seed for built-in hash randomization
         os.environ['PYTHONHASHSEED'] = str(seed)
+        
+         # 计算初始损失缩放因子
+        self._compute_initial_loss_scaling_factors()
+        
+        print(f"Start training with loss: {self.ema_loss}")
         
         for epoch in range(self.n_epochs):
             # Train for one epoch

@@ -269,6 +269,13 @@ class Trainer:
                 wave_lengths_16k_device = wave_lengths_16k.to(self.device) if isinstance(wave_lengths_16k, torch.Tensor) else wave_lengths_16k
                 mel_lens_device = mel_lens.to(self.device) if isinstance(mel_lens, torch.Tensor) else mel_lens
                 
+                # 为了确保教师模型和学生模型使用相同的随机种子，我们需要固定随机种子
+                # 保存当前的随机种子状态
+                torch_rng_state = torch.get_rng_state()
+                cuda_rng_state = None
+                if torch.cuda.is_available():
+                    cuda_rng_state = torch.cuda.get_rng_state()
+                
                 # 计算各损失组件的原始值
                 (original_loss_ar, original_logits_ar), (original_loss_cfm, original_logits_cfm) = self.model(
                     waves_16k_device,
@@ -277,8 +284,7 @@ class Trainer:
                     mel_lens_device,
                     forward_ar=self.train_ar,
                     forward_cfm=self.train_cfm,
-                )
-                
+                )                
                 original_ar_loss_val = original_loss_ar.item() if isinstance(original_loss_ar, torch.Tensor) else 0.0
                 original_cfm_loss_val = original_loss_cfm.item() if isinstance(original_loss_cfm, torch.Tensor) else 0.0
                 
@@ -288,6 +294,11 @@ class Trainer:
                 
                 if self.teacher_model is not None and (self.use_distill_ar or self.use_distill_cfm):
                     print("Calculating distillation loss...")
+                    # 使用与学生模型相同的随机种子
+                    torch.set_rng_state(torch_rng_state)
+                    if cuda_rng_state is not None:
+                        torch.cuda.set_rng_state(cuda_rng_state)
+                    
                     # 使用教师模型生成目标输出
                     # 只计算需要蒸馏的模型部分的输出，提高效率
                     teacher_forward_ar = self.train_ar and self.use_distill_ar
@@ -419,7 +430,6 @@ class Trainer:
                             print("4 Calculating AR distillation loss...")
                             if self.accelerator.is_main_process:
                                 print(f"Warning: Type mismatch in AR distillation loss - student: {type(original_logits_ar)}, teacher: {type(teacher_logits_ar)}")
-                
                 
                 # 计算总原始损失
                 original_total_loss_ar = original_ar_loss_val + original_distill_ar_loss          
@@ -923,6 +933,18 @@ class Trainer:
 
     def validate_one_step(self, batch):
         """在验证集上评估一个批次"""
+        # Ensure deterministic behavior by setting seeds based on current state
+        seed = 1234 + self.iters
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(seed)
+            torch.cuda.manual_seed_all(seed)
+        
+        # Also set seed for built-in hash randomization
+        os.environ['PYTHONHASHSEED'] = str(seed)
+        
         with torch.no_grad():
             # Handle both old and new batch formats
             if len(batch) == 5:
@@ -1147,6 +1169,17 @@ class Trainer:
                     # 整个训练开始前，先验证一次。只打印。
                     first_val_loss = self.validate()
                     print(f"\nFirst validation loss: 【{first_val_loss}】")
+                    
+                seed = 1234 + self.iters
+                random.seed(seed)
+                np.random.seed(seed)
+                torch.manual_seed(seed)
+                if torch.cuda.is_available():
+                    torch.cuda.manual_seed(seed)
+                    torch.cuda.manual_seed_all(seed)
+                
+                # Also set seed for built-in hash randomization
+                os.environ['PYTHONHASHSEED'] = str(seed)
                 
                 if not init_epoch:
                     self.model.train()
@@ -1277,6 +1310,13 @@ class Trainer:
                 autocast_context = nullcontext()
             
             with autocast_context:
+                # 为了确保教师模型和学生模型使用相同的随机种子，我们需要固定随机种子
+                # 保存当前的随机种子状态
+                torch_rng_state = torch.get_rng_state()
+                cuda_rng_state = None
+                if torch.cuda.is_available():
+                    cuda_rng_state = torch.cuda.get_rng_state()
+                
                 # 安全地将张量移动到设备
                 waves_16k_device = waves_16k.to(self.device) if isinstance(waves_16k, torch.Tensor) else waves_16k
                 mels_device = mels.to(self.device) if isinstance(mels, torch.Tensor) else mels
@@ -1311,6 +1351,11 @@ class Trainer:
                                 module.eval()
                     
                     check_and_set_eval(self.teacher_model, "教师模型")
+                    
+                    # 使用与学生模型相同的随机种子
+                    torch.set_rng_state(torch_rng_state)
+                    if cuda_rng_state is not None:
+                        torch.cuda.set_rng_state(cuda_rng_state)
                     
                     with torch.no_grad():
                         # 使用教师模型生成目标输出
