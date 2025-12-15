@@ -37,23 +37,18 @@ def load_v2_models(args):
     cfg = DictConfig(yaml.safe_load(open(config_path, "r")))
     vc_wrapper = instantiate(cfg)
     
-    # 根据fp16参数决定加载模型时的数据类型
-    model_dtype = torch.float16 if fp16 else torch.float32
-    print(f"正在尝试使用{model_dtype}精度加载V2模型到{device}设备...")
+    print(f"正在尝试加载V2模型到{device}设备...")
     
     try:
         vc_wrapper.load_checkpoints(ar_checkpoint_path=args.ar_checkpoint_path,
-                                    cfm_checkpoint_path=args.cfm_checkpoint_path,
-                                    dtype=model_dtype)
+                                    cfm_checkpoint_path=args.cfm_checkpoint_path)
     except Exception as e:
-        print(f"警告: 在{device}设备上无法使用{model_dtype}精度加载V2模型: {e}")
+        print(f"警告: 在{device}设备上无法加载V2模型: {e}")
         print(f"正在回退到float32精度加载V2模型...")
         fp16 = False
         dtype = torch.float32
-        model_dtype = torch.float32
         vc_wrapper.load_checkpoints(ar_checkpoint_path=args.ar_checkpoint_path,
-                                    cfm_checkpoint_path=args.cfm_checkpoint_path,
-                                    dtype=model_dtype)
+                                    cfm_checkpoint_path=args.cfm_checkpoint_path)
         print(f"信息: 已将内部fp16标志设置为False，以保持一致性")
         print(f"V2模型已加载到{device}设备，使用float32数据类型")
     
@@ -73,6 +68,7 @@ def load_v2_models(args):
         # vc_wrapper.compile_cfm()
 
     return vc_wrapper
+
 # 重新加载模型为float32精度的函数
 def reload_v2_model(vc_wrapper, args):
     """重新加载V2模型为float32精度"""
@@ -82,10 +78,8 @@ def reload_v2_model(vc_wrapper, args):
     print(f"信息: 已将内部fp16标志设置为False，以保持一致性")
     
     # 重新加载模型为float32精度
-    model_dtype = torch.float32
     vc_wrapper.load_checkpoints(ar_checkpoint_path=args.ar_checkpoint_path,
-                                cfm_checkpoint_path=args.cfm_checkpoint_path,
-                                dtype=model_dtype)
+                                cfm_checkpoint_path=args.cfm_checkpoint_path)
     vc_wrapper.to(device)
     vc_wrapper.eval()
     vc_wrapper.setup_ar_caches(max_batch_size=1, max_seq_len=4096, dtype=dtype, device=device)
