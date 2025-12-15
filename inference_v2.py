@@ -193,19 +193,19 @@ def main(args):
     if isinstance(converted_audio, torch.Tensor):
         converted_audio = converted_audio.cpu().numpy()
     
-    print(f"原始音频数据形状: {converted_audio.shape}")
-    print(f"原始音频数据类型: {converted_audio.dtype}")
-    print(f"原始音频数据范围: [{converted_audio.min():.6f}, {converted_audio.max():.6f}]")
+    # print(f"原始音频数据形状: {converted_audio.shape}")
+    # print(f"原始音频数据类型: {converted_audio.dtype}")
+    # print(f"原始音频数据范围: [{converted_audio.min():.6f}, {converted_audio.max():.6f}]")
     
     # 确保音频数据在一维或二维（立体声）范围内
     if converted_audio.ndim == 1:
         # 单声道音频
         audio_data = converted_audio
-        print("处理为单声道音频")
+        # print("处理为单声道音频")
     elif converted_audio.ndim == 2:
         # 立体声音频，需要转置
         audio_data = converted_audio.T
-        print("处理为立体声音频")
+        # print("处理为立体声音频")
     else:
         print(f"警告: 音频数据维度异常 ({converted_audio.ndim}D)，尝试将其转换为一维")
         audio_data = converted_audio.flatten()
@@ -228,9 +228,9 @@ def main(args):
         audio_data = audio_data / np.abs(audio_data).max()
         print("警告: 音频数据已被归一化到[-1, 1]范围")
     
-    print(f"处理后音频数据形状: {audio_data.shape}")
-    print(f"处理后音频数据类型: {audio_data.dtype}")
-    print(f"处理后音频数据范围: [{audio_data.min():.6f}, {audio_data.max():.6f}]")
+    # print(f"处理后音频数据形状: {audio_data.shape}")
+    # print(f"处理后音频数据类型: {audio_data.dtype}")
+    # print(f"处理后音频数据范围: [{audio_data.min():.6f}, {audio_data.max():.6f}]")
     
     try:
         print(f"尝试使用float32格式保存音频文件: {output_path}")
