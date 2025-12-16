@@ -61,12 +61,42 @@ select_any_file() {
     echo "$path"
 }
 
+# 交互式选择目录函数
+select_directory() {
+    local prompt="$1"
+    local default_path="$2"
+    
+    # 检查是否在macOS上运行且支持图形界面
+    if command -v osascript &> /dev/null; then
+        # 使用AppleScript显示目录选择对话框
+        local script="choose folder with prompt \"$prompt\""
+        if [[ -n "$default_path" && -d "$default_path" ]]; then
+            script+=" default location POSIX file \"$default_path\""
+        fi
+        local result=$(osascript -e "$script" 2>/dev/null)
+        if [[ $? -eq 0 && -n "$result" ]]; then
+            # 将HFS路径转换为Unix路径
+            local unix_path=$(convert_hfs_to_unix "$result")
+            echo "$unix_path"
+            return 0
+        else
+            echo ""
+            return 1
+        fi
+    fi
+    
+    # 如果没有图形界面或AppleScript失败，提示用户手动输入路径
+    read -p "$prompt: " path
+    echo "$path"
+}
+
 # 解析命令行参数
 INTERACTIVE_MODE=false
 APP_TYPE="vc"  # 默认应用类型: vc (voice conversion)
 USE_CPU=true
 CHECKPOINT=""
 CONFIG=""
+CONF_DIR=""
 CFM_CHECKPOINT=""
 AR_CHECKPOINT=""
 FP16="False"
@@ -83,6 +113,7 @@ show_help() {
     echo "  -G, --gpu             使用 GPU 运行（如果可用） (默认使用 CPU)"
     echo "  -p, --checkpoint PATH 指定模型检查点路径"
     echo "  -c, --config PATH     指定模型配置文件路径"
+    echo "  -d, --conf-dir PATH   指定配置文件和检查点目录"
     echo "  -m, --cfm-checkpoint PATH 指定 CFM 模型检查点路径 (仅 V2)"
     echo "  -a, --ar-checkpoint PATH  指定 AR 模型检查点路径 (仅 V2)"
     echo "  -f, --fp16            是否使用 FP16 (默认: False)"
@@ -123,6 +154,11 @@ while [[ $# -gt 0 ]]; do
         -c|--config)
             CONFIG="$2"
             echo "使用配置: $CONFIG"
+            shift 2
+            ;;
+        -d|--conf-dir)
+            CONF_DIR="$2"
+            echo "使用配置目录: $CONF_DIR"
             shift 2
             ;;
         -m|--cfm-checkpoint)
@@ -241,6 +277,19 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
             fi
         fi
         
+        read -p "是否指定配置目录 (--conf-dir)？(y/N): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            echo "请选择配置目录:"
+            SELECTED_CONF_DIR=$(select_directory "请选择配置目录" "./runs")
+            if [[ -n "$SELECTED_CONF_DIR" ]]; then
+                CONF_DIR="$SELECTED_CONF_DIR"
+                echo "已选择配置目录: $CONF_DIR"
+            else
+                echo "未指定配置目录"
+            fi
+        fi
+        
         # 询问 FP16 设置
         read -p "是否使用 FP16 (默认: False)？(y/N): " -n 1 -r
         echo
@@ -327,6 +376,9 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
         if [[ -n "$CONFIG" ]]; then
             echo "配置文件: $CONFIG"
         fi
+        if [[ -n "$CONF_DIR" ]]; then
+            echo "配置目录: $CONF_DIR"
+        fi
         echo "FP16: $FP16"
     elif [[ "$APP_TYPE" = "v2" ]]; then
         if [[ -n "$CFM_CHECKPOINT" ]]; then
@@ -360,6 +412,9 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     
     if [[ -n "$CONFIG" ]]; then
         CMD+=" --config \"$CONFIG\""
+    fi
+    if [[ -n "$CONF_DIR" ]]; then
+        CMD+=" --conf-dir \"$CONF_DIR\""
     fi
 
     if [[ "$APP_TYPE" = "vc" ]] || [[ "$APP_TYPE" = "svc" ]]; then
@@ -452,6 +507,9 @@ fi
 
 if [ -n "$CONFIG" ]; then
     ARGS="$ARGS --config $CONFIG"
+fi
+if [ -n "$CONF_DIR" ]; then
+    ARGS="$ARGS --conf-dir $CONF_DIR"
 fi
 
 # 根据应用类型运行相应的应用程序
