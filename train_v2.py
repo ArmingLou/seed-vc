@@ -59,6 +59,7 @@ class Trainer:
             distill_temperature=1.0,
             resume_lr=0.0,  # 添加resume_lr参数，默认值为0.0
             language=None,  # 添加language参数，默认值为None
+            cfm_scale=1.0, # ar 和 cfm 同时训练时，提供一个参数可以手动调节 cfm模型 的训练权重。
         ):
         self.config_path = config_path
         self.mixed_precision = mixed_precision
@@ -79,6 +80,7 @@ class Trainer:
         self.resume_lr = resume_lr
         # 保存language参数
         self.language = language
+        self.cfm_scale = cfm_scale
         
         # Check FORCE_CPU environment variable
         force_cpu = os.environ.get('FORCE_CPU', '0') == '1'
@@ -523,10 +525,10 @@ class Trainer:
         
             
         scaled_loss_distill_ar = original_loss_distill_ar * apply_loss_scaling_factors['distill_ar']
-        scaled_loss_distill_cfm = original_loss_distill_cfm * apply_loss_scaling_factors['distill_cfm']
+        scaled_loss_distill_cfm = original_loss_distill_cfm * apply_loss_scaling_factors['distill_cfm']* (self.cfm_scale if self.cfm_scale > 0.0 else 1.0)
         
         # 主CFM损失也使用缩放因子
-        scaled_cfm_loss = original_loss_cfm * apply_loss_scaling_factors['cfm']
+        scaled_cfm_loss = original_loss_cfm * apply_loss_scaling_factors['cfm'] * (self.cfm_scale if self.cfm_scale > 0.0 else 1.0)
         scaled_ar_loss = original_loss_ar * apply_loss_scaling_factors['ar']
         
         
@@ -1520,7 +1522,7 @@ class Trainer:
         self.optimizer.zero_grad()
 
         # Log training progress
-        self._log_training_progress(epoch, i, loss_total, scaled_loss_ar, scaled_loss_cfm, grad_norm_g, scaled_distill_cfm_loss, scaled_distill_ar_loss, distill_cfm_loss, distill_ar_loss)
+        self._log_training_progress(epoch, i, loss_total, scaled_loss_ar, scaled_loss_cfm, loss_cfm, grad_norm_g, scaled_distill_cfm_loss, scaled_distill_ar_loss, distill_cfm_loss, distill_ar_loss)
 
 
     def _fallback_to_fp32(self):
@@ -1536,7 +1538,7 @@ class Trainer:
         # 我们需要告诉accelerator后续操作不再使用autocast
         print("Switched to fp32 training mode. Continuing training...")
 
-    def _log_training_progress(self, epoch, i, total_training_loss, loss_ar, loss_cfm, grad_norm_g, distill_cfm_loss_scaled, distill_ar_loss_scaled, distill_cfm_loss, distill_ar_loss):
+    def _log_training_progress(self, epoch, i, total_training_loss, loss_ar, loss_cfm, loss_cfm_ori, grad_norm_g, distill_cfm_loss_scaled, distill_ar_loss_scaled, distill_cfm_loss, distill_ar_loss):
         """Log training progress to tensorboard and wandb"""
         if self.iters % self.log_interval == 0 and self.accelerator.is_main_process:
             with torch.no_grad():
@@ -1564,14 +1566,21 @@ class Trainer:
                 else:
                     loss_cfm_val = loss_cfm
                     
+                if isinstance(loss_cfm_ori, tuple):
+                    ori_loss_cfm_val = loss_cfm_ori[0].item() if isinstance(loss_cfm_ori[0], torch.Tensor) else loss_cfm_ori[0]
+                elif isinstance(loss_cfm_ori, torch.Tensor):
+                    ori_loss_cfm_val = loss_cfm_ori.item()
+                else:
+                    ori_loss_cfm_val = loss_cfm_ori
+                    
                 distill_loss = distill_cfm_loss_scaled + distill_ar_loss_scaled
                     
                 print(f"\nDetailed Loss Components at epoch {epoch}, step {self.iters}:")
                 print(f"  AR Loss: {loss_ar_val:.6f}")
-                print(f"  CFM Loss: {loss_cfm_val:.6f}")
+                print(f"  CFM Loss: {loss_cfm_val:.6f} (raw: {ori_loss_cfm_val:.6f} , scale: {(self.cfm_scale if self.cfm_scale > 0.0 else 1.0):.4f})")
                 if self.teacher_model is not None and (self.use_distill_ar or self.use_distill_cfm):
                     print(f"  AR Distill Loss: {distill_ar_loss_scaled:.6f} (raw: {distill_ar_loss:.6f} , scale: {self.loss_scaling_factors['distill_ar']:.6f})")
-                    print(f"  CFM Distill Loss: {distill_cfm_loss_scaled:.6f} (raw: {distill_cfm_loss:.6f} , scale: {self.loss_scaling_factors['distill_cfm']:.6f})")
+                    print(f"  CFM Distill Loss: {distill_cfm_loss_scaled:.6f} (raw: {distill_cfm_loss:.6f} , scale: {self.loss_scaling_factors['distill_cfm']:.6f} * {(self.cfm_scale if self.cfm_scale > 0.0 else 1.0):.4f})")
                 # 计算总训练损失（包含蒸馏损失）
                 print(f"  Total Training Loss: {total_training_loss:.6f}")
                 # 同时打印各组件占总损失的比例
@@ -1766,6 +1775,7 @@ def main(args):
         distill_cfm=args.distill_cfm,
         grad_clip_norm=args.grad_clip_norm,
         distill_temperature=args.distill_temperature,
+        cfm_scale=args.cfm_scale,
     )
     # 添加fp16错误处理
     try:
@@ -1819,6 +1829,8 @@ if __name__ == '__main__':
                        help='Gradient clipping norm value')
     parser.add_argument('--distill-temperature', type=float, default=1.0,
                        help='Temperature parameter for knowledge distillation')
+                       
+    parser.add_argument('--cfm-scale', type=float, default=1.0, help='Scale factor for CFM model (0.0 means no scaling)')
     
     # 语言参数
     parser.add_argument('--language', type=str, default=None, help='Language for Whisper model')

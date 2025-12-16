@@ -135,6 +135,9 @@ PRETRAINED_AR_CKPT=""
 GRAD_CLIP_NORM=1.0
 DISTILL_TEMPERATURE=1.0
 
+# 新增CFM缩放参数（V2版本特有）
+CFM_SCALE=1.0
+
 # 日志文件路径
 LOG_FILE=""
 
@@ -300,6 +303,12 @@ while [[ $# -gt 0 ]]; do
             echo "设置蒸馏温度: $DISTILL_TEMPERATURE"
             shift 2
             ;;
+        
+        --cfm-scale)
+            CFM_SCALE="$2"
+            echo "设置CFM缩放因子: $CFM_SCALE"
+            shift 2
+            ;;
 
         *)
             echo "未知参数: $1"
@@ -338,6 +347,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --log-file              设置日志文件路径 (默认: 不保存日志文件)"
             echo "  --grad-clip-norm        设置梯度裁剪范数 (默认: 1.0)"
             echo "  --distill-temperature   设置蒸馏温度 (默认: 1.0)"
+            echo "  --cfm-scale             设置CFM缩放因子 (V2版本特有，默认: 1.0)"
             
             echo "  -I, --interactive 交互式选择参数"
             exit 1
@@ -646,6 +656,19 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     fi
     echo "蒸馏温度: $DISTILL_TEMPERATURE"
     
+    # 询问CFM缩放因子（仅V2版本）
+    if [[ "$VERSION" = "v2" ]]; then
+        echo ""
+        echo "=== CFM缩放因子参数 ==="
+        read -p "请输入CFM缩放因子 (默认: 1.0): " cfm_scale_input
+        if [[ -n "$cfm_scale_input" ]]; then
+            CFM_SCALE="$cfm_scale_input"
+        else
+            CFM_SCALE=1.0
+        fi
+        echo "CFM缩放因子: $CFM_SCALE"
+    fi
+    
     # 如果是V2版本，询问训练目标
     if [[ "$VERSION" = "v2" ]]; then
         echo ""
@@ -760,6 +783,11 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     echo "初始学习率: $INITIAL_LR"
     echo "预热步数: $WARMUP_STEPS"
     echo "恢复学习率: $RESUME_LR"
+    
+    # 显示CFM缩放因子（仅V2版本）
+    if [[ "$VERSION" = "v2" ]]; then
+        echo "CFM缩放因子: $CFM_SCALE"
+    fi
     
     # 显示语言参数
     if [[ -n "$LANGUAGE" ]]; then
@@ -888,6 +916,11 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     # 添加梯度裁剪范数和蒸馏温度参数
     CMD+=" --grad-clip-norm $GRAD_CLIP_NORM"
     CMD+=" --distill-temperature $DISTILL_TEMPERATURE"
+    
+    # 添加CFM缩放因子参数（仅V2版本）
+    if [[ "$VERSION" = "v2" ]]; then
+        CMD+=" --cfm-scale $CFM_SCALE"
+    fi
     
     if [[ "$VERSION" = "v2" ]]; then
         if [[ -n "$TRAIN_CFM_ARG" ]]; then
@@ -1058,6 +1091,9 @@ else
     # 添加梯度裁剪范数和蒸馏温度参数
     V2_TRAIN_ARGS+=" --grad-clip-norm $GRAD_CLIP_NORM"
     V2_TRAIN_ARGS+=" --distill-temperature $DISTILL_TEMPERATURE"
+    
+    # 添加CFM缩放因子参数
+    V2_TRAIN_ARGS+=" --cfm-scale $CFM_SCALE"
     
     # 使用统一的训练脚本
     V2_SCRIPT="train_v2.py"
