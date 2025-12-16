@@ -1615,7 +1615,7 @@ class Trainer:
                 else:
                     loss_cfm_val = loss_cfm
                 print(f"Learning rate at step {self.iters}: 《{cur_lr:.2e}》")
-                print("Epoch %d, Step %d, Iteration %d, loss: 「%.4f」, Loss AR: %.4f, Loss CFM: %.4f, Loss Distill: %.4f, Grad Norm: %.4f, LR: %.6f"
+                print("Epoch %d, Step %d, Iteration %d, loss: 「%.4f」, Loss AR: %.4f, Loss CFM: %.4f, Loss Distill: %.4f, Grad Norm: %.4f, LR: %.9f"
                       % (epoch, self.iters, i, total_training_loss, loss_ar_val, loss_cfm_val, distill_loss, grad_norm_g, cur_lr))
                
     def _save_checkpoint(self, epoch):
