@@ -561,23 +561,29 @@ def main(args):
         with gr.Row():
             config_choice = gr.Dropdown(choices=config_file_names, value="None", label="选择配置文件 / Select Config File")
             checkpoint_choice = gr.Dropdown(choices=checkpoint_file_names, value="None", label="选择检查点文件 / Select Checkpoint File")
-            reload_btn = gr.Button("重新加载模型 / Reload Model")
-        
+            with gr.Column():
+                reload_btn = gr.Button("重新加载模型 / Reload Model")
+                status_bar = gr.Text(show_label=False)
+            
+        with gr.Row():
+            source_audio = gr.Audio(type="filepath", label="Source Audio / 源音频")
+            reference_audio = gr.Audio(type="filepath", label="Reference Audio / 参考音频")
+        with gr.Row():
+            convert_btn = gr.Button("开始转换 / Convert")
+        with gr.Row():
+            stream_output = gr.Audio(label="Stream Output Audio / 流式输出", streaming=True, format='mp3')
+            full_output = gr.Audio(label="Full Output Audio / 完整输出", streaming=False, format='wav')
         with gr.Row():
             with gr.Column():
-                source_audio = gr.Audio(type="filepath", label="Source Audio / 源音频")
-                reference_audio = gr.Audio(type="filepath", label="Reference Audio / 参考音频")
+                language = gr.Dropdown(choices=[("Auto Detect", None), ("Chinese", "zh"), ("Cantonese", "yue"), ("English", "en")], value=None, label="Language / 语言", info="Select language for Whisper model / 为Whisper模型选择语言")
                 diffusion_steps = gr.Slider(minimum=1, maximum=200, value=10, step=1, label="Diffusion Steps / 扩散步数", info="10 by default, 50~100 for best quality / 默认为 10，50~100 为最佳质量")
                 length_adjust = gr.Slider(minimum=0.5, maximum=2.0, step=0.1, value=1.0, label="Length Adjust / 长度调整", info="<1.0 for speed-up speech, >1.0 for slow-down speech / <1.0 加速语速，>1.0 减慢语速")
                 inference_cfg_rate = gr.Slider(minimum=0.0, maximum=1.0, step=0.1, value=1.0, label="Inference CFG Rate", info="has subtle influence / 有微小影响")
-                language = gr.Dropdown(choices=[("Auto Detect", None), ("Chinese", "zh"), ("Cantonese", "yue"), ("English", "en")], value=None, label="Language / 语言", info="Select language for Whisper model / 为Whisper模型选择语言")
-                convert_btn = gr.Button("开始转换 / Convert")
-            
-            with gr.Column():
-                stream_output = gr.Audio(label="Stream Output Audio / 流式输出", streaming=True, format='mp3')
-                full_output = gr.Audio(label="Full Output Audio / 完整输出", streaming=False, format='wav')
         
         examples = [
+            [None, "examples/reference/wise_9347.mp3", 100, 1.0, 1.0, "yue"],
+            [None, "examples/reference/wise_9494.mp3", 100, 1.0, 1.0, "yue"],
+            [None, "examples/reference/wise_9495.mp3", 100, 1.0, 1.0, "yue"],
             ["examples/source/yae_0.wav", "examples/reference/dingzhen_0.wav", 25, 1.0, 0.7, None],
             ["examples/source/jay_0.wav", "examples/reference/azuma_0.wav", 25, 1.0, 0.7, None],
         ]
@@ -607,14 +613,28 @@ def main(args):
                 return "模型已使用默认设置重新加载", config_name, checkpoint_name
         
         def convert_wrapper(source, target, diff_steps, len_adjust, cfg_rate, lang):
-            # Call voice_conversion with the right parameters
-            for result in voice_conversion(source, target, diff_steps, len_adjust, cfg_rate, lang):
-                yield result
+            # 禁用转换按钮
+            yield None, None, gr.update(interactive=False)
+            final_result = (None, None)
+            try:
+                # Call voice_conversion with the right parameters
+                for result in voice_conversion(source, target, diff_steps, len_adjust, cfg_rate, lang):
+                    # 第一个元素是按钮状态，后续是音频结果
+                    final_result = result
+            except Exception as e:
+                # 发生异常时也要重新启用按钮
+                yield None, None, gr.update(interactive=True)
+                # 重新抛出异常以便在控制台看到错误信息
+                raise e
+            else:
+                # 正常结束时重新启用按钮
+                yield final_result[0], final_result[1], gr.update(interactive=True)
+            
         
-        reload_btn.click(fn=reload_model, inputs=[config_choice, checkpoint_choice], outputs=[gr.Textbox(label="状态 / Status"), config_choice, checkpoint_choice])
+        reload_btn.click(fn=reload_model, inputs=[config_choice, checkpoint_choice], outputs=[status_bar, config_choice, checkpoint_choice])
         convert_btn.click(fn=convert_wrapper, 
                          inputs=[source_audio, reference_audio, diffusion_steps, length_adjust, inference_cfg_rate, language],
-                         outputs=[stream_output, full_output])
+                         outputs=[stream_output, full_output, convert_btn])
     
     demo.launch(share=args.share)
 
