@@ -37,32 +37,54 @@ def load_models(args, config_path=None, checkpoint_path=None):
     if (device.type == "cpu" or device.type == "mps") and fp16:
         print(f"Warning: fp16 is enabled for {device.type} device, which may cause issues")
     
+    # Handle config file - if not provided or set to "None", load from HF
     if config_path is not None and config_path != "None":
         # Use the selected config file
         dit_config_path = config_path
-        # Extract checkpoint name from config
-        config_content = yaml.safe_load(open(dit_config_path, "r"))
-        checkpoint_name = config_content.get("pretrained_model", "DiT_seed_v2_uvit_whisper_small_wavenet_bigvgan_pruned.pth")
-        # If checkpoint_path is provided, use it instead
-        if checkpoint_path is not None and checkpoint_path != "None":
-            dit_checkpoint_path = checkpoint_path
-        else:
-            dit_checkpoint_path, _ = load_custom_model_from_hf("Plachta/Seed-VC", checkpoint_name, os.path.basename(dit_config_path))
-    elif args.checkpoint is None or args.checkpoint == "":
-        dit_checkpoint_path, dit_config_path = load_custom_model_from_hf("Plachta/Seed-VC",
-                                                                         "DiT_seed_v2_uvit_whisper_small_wavenet_bigvgan_pruned.pth",
-                                                                         "config_dit_mel_seed_uvit_whisper_small_wavenet.yml")
     else:
+        # Load default config from HF
+        _, dit_config_path = load_custom_model_from_hf("Plachta/Seed-VC",
+                                                    "DiT_seed_v2_uvit_whisper_small_wavenet_bigvgan_pruned.pth",
+                                                    "config_dit_mel_seed_uvit_whisper_small_wavenet.yml")
+    
+    # Handle checkpoint file - independent of config file
+    if checkpoint_path is not None and checkpoint_path != "None":
+        # Use the selected checkpoint file
+        dit_checkpoint_path = checkpoint_path
+    elif checkpoint_path is None and config_path is not None and config_path != "None":
+        # Extract checkpoint name from config only if checkpoint_path is None (not explicitly set to "None")
+        # and config_path is provided
+        try:
+            config_content = yaml.safe_load(open(config_path, "r"))
+            checkpoint_name = config_content.get("pretrained_model", "DiT_seed_v2_uvit_whisper_small_wavenet_bigvgan_pruned.pth")
+            dit_checkpoint_path = load_custom_model_from_hf("Plachta/Seed-VC", checkpoint_name, None)
+        except:
+            # If we can't load the config or find checkpoint name, use default
+            dit_checkpoint_path = load_custom_model_from_hf("Plachta/Seed-VC",
+                                                        "DiT_seed_v2_uvit_whisper_small_wavenet_bigvgan_pruned.pth",
+                                                        None)
+    elif args.checkpoint is not None and args.checkpoint != "":
         dit_checkpoint_path = args.checkpoint
-        dit_config_path = args.config
-        
+    elif checkpoint_path == "None" or checkpoint_path is None:
+        # Explicitly set to None or not provided, load default checkpoint from HF
+        dit_checkpoint_path = load_custom_model_from_hf("Plachta/Seed-VC",
+                                                    "DiT_seed_v2_uvit_whisper_small_wavenet_bigvgan_pruned.pth",
+                                                    None)
+    else:
+        # Default case: load default checkpoint
+        dit_checkpoint_path = load_custom_model_from_hf("Plachta/Seed-VC",
+                                                   "DiT_seed_v2_uvit_whisper_small_wavenet_bigvgan_pruned.pth",
+                                                   None)
+    
+    print(f"Loading config from {dit_config_path}")
+    print(f"Loading checkpoint from {dit_checkpoint_path}")
     config = yaml.safe_load(open(dit_config_path, "r"))
     model_params = recursive_munch(config["model_params"])
     model_params.dit_type = 'DiT'
     model = build_model(model_params, stage="DiT")
     hop_length = config["preprocess_params"]["spect_params"]["hop_length"]
     sr = config["preprocess_params"]["sr"]
-
+    
     # Load checkpoints
     model, _, _, _ = load_checkpoint(
         model,
@@ -520,7 +542,7 @@ def main(args):
     
     # Get list of config files and checkpoint files from conf_dir
     if args.conf_dir and os.path.exists(args.conf_dir):
-        config_files = glob.glob(os.path.join(args.conf_dir, "*.yml"))
+        config_files = glob.glob(os.path.join(args.conf_dir, "*.yml")) + glob.glob(os.path.join(args.conf_dir, "*.yaml"))
         config_file_names = [os.path.basename(f) for f in config_files]
         config_file_dict = {name: path for name, path in zip(config_file_names, config_files)}
         
@@ -530,7 +552,7 @@ def main(args):
     else:
         # Default to presets directory
         config_dir = "configs/presets"
-        config_files = glob.glob(os.path.join(config_dir, "*.yml"))
+        config_files = glob.glob(os.path.join(config_dir, "*.yml")) + glob.glob(os.path.join(config_dir, "*.yaml"))
         config_file_names = [os.path.basename(f) for f in config_files]
         config_file_dict = {name: path for name, path in zip(config_file_names, config_files)}
         
@@ -561,10 +583,10 @@ def main(args):
         with gr.Row():
             config_choice = gr.Dropdown(choices=config_file_names, value="None", label="选择配置文件 / Select Config File")
             checkpoint_choice = gr.Dropdown(choices=checkpoint_file_names, value="None", label="选择检查点文件 / Select Checkpoint File")
-            with gr.Column():
-                reload_btn = gr.Button("重新加载模型 / Reload Model")
-                status_bar = gr.Text(show_label=False)
+            reload_btn = gr.Button("重新加载模型 / Reload Model")
             
+        with gr.Row():
+            status_bar = gr.Text(show_label=False)
         with gr.Row():
             source_audio = gr.Audio(type="filepath", label="Source Audio / 源音频")
             reference_audio = gr.Audio(type="filepath", label="Reference Audio / 参考音频")
@@ -594,6 +616,7 @@ def main(args):
         )
         
         def reload_model(config_name, checkpoint_name):
+            print(f"====Reloading model with config {config_name} and checkpoint {checkpoint_name}")
             global model, semantic_fn, vocoder_fn, campplus_model, to_mel, mel_fn_args
             config_path = config_file_dict.get(config_name) if config_name != "None" else None
             checkpoint_path = checkpoint_file_dict.get(checkpoint_name) if checkpoint_name != "None" else None
@@ -601,11 +624,7 @@ def main(args):
             if config_path or checkpoint_path:
                 # Reload models with new config/checkpoint
                 model, semantic_fn, vocoder_fn, campplus_model, to_mel, mel_fn_args = load_models(args, config_path=config_path, checkpoint_path=checkpoint_path)
-                status_msg = f"模型已重新加载:"
-                if config_path:
-                    status_msg += f" 配置文件={config_name}"
-                if checkpoint_path:
-                    status_msg += f" 检查点文件={checkpoint_name}"
+                status_msg = f" 配置文件:   {config_name if config_name != 'None' else 'Default'}     |     检查点文件:   {checkpoint_name if checkpoint_name != 'None' else 'Default'}"
                 return status_msg, config_name, checkpoint_name
             else:
                 # Reload with default settings

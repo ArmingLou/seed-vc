@@ -248,6 +248,19 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
         echo "已启用共享 Gradio 应用"
     fi
     
+    read -p "是否指定配置目录 (--conf-dir)？(y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo "请选择配置目录:"
+        SELECTED_CONF_DIR=$(select_directory "请选择配置目录" "./runs")
+        if [[ -n "$SELECTED_CONF_DIR" ]]; then
+            CONF_DIR="$SELECTED_CONF_DIR"
+            echo "已选择配置目录: $CONF_DIR"
+        else
+            echo "未指定配置目录"
+        fi
+    fi
+    
     # 根据应用类型询问相应的参数
     if [[ "$APP_TYPE" = "vc" ]] || [[ "$APP_TYPE" = "svc" ]]; then
         # VC 和 SVC 共享的参数
@@ -274,19 +287,6 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
                 echo "已选择配置文件: $CONFIG"
             else
                 echo "未指定配置文件"
-            fi
-        fi
-        
-        read -p "是否指定配置目录 (--conf-dir)？(y/N): " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            echo "请选择配置目录:"
-            SELECTED_CONF_DIR=$(select_directory "请选择配置目录" "./runs")
-            if [[ -n "$SELECTED_CONF_DIR" ]]; then
-                CONF_DIR="$SELECTED_CONF_DIR"
-                echo "已选择配置目录: $CONF_DIR"
-            else
-                echo "未指定配置目录"
             fi
         fi
         
