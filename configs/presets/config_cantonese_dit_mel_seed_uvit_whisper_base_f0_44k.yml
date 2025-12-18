@@ -35,7 +35,7 @@ model_params:
 
   speech_tokenizer:
     type: 'whisper'
-    name: "openai/whisper-small"
+    name: "alvanlii/whisper-small-cantonese"
 
   style_encoder:
     dim: 192
