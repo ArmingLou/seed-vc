@@ -138,6 +138,10 @@ DISTILL_TEMPERATURE=1.0
 # 新增CFM缩放参数（V2版本特有）
 CFM_SCALE=1.0
 
+# 新增批处理大小和工作线程数参数
+BATCH_SIZE=4
+NUM_WORKERS=0
+
 # 日志文件路径
 LOG_FILE=""
 
@@ -310,9 +314,21 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
 
+        --batch-size|-b)
+            BATCH_SIZE="$2"
+            echo "设置批处理大小: $BATCH_SIZE"
+            shift 2
+            ;;
+
+        --num-workers|-w)
+            NUM_WORKERS="$2"
+            echo "设置工作线程数: $NUM_WORKERS"
+            shift 2
+            ;;
+
         *)
             echo "未知参数: $1"
-            echo "用法: $0 [--gpu|-G] [--v1|--v2] [--run-name|-n NAME] [--config|-c CONFIG_PATH] [--dataset-dir|-d DATASET_PATH] [--val-dataset-dir|--val-dir VAL_DATASET_PATH] [--max-steps|-s STEPS] [--max-epochs|-e EPOCHS] [--save-every|-S INTERVAL] [--patience|-p PATIENCE] [--validation-interval|-v INTERVAL] [--train-cfm] [--train-ar] [--distill] [--distill-ar] [--distill-cfm] [--min-lr MIN_LR] [--loss-log-interval L0SS_LOG_INTERVAL] [--initial-lr INITIAL_LR] [--warmup-steps WARMUP_STEPS] [--pretrained-ckpt CKPT_PATH] [--pretrained-cfm-ckpt CFM_CKPT_PATH] [--pretrained-ar-ckpt AR_CKPT_PATH]"
+            echo "用法: $0 [--gpu|-G] [--v1|--v2] [--run-name|-n NAME] [--config|-c CONFIG_PATH] [--dataset-dir|-d DATASET_PATH] [--val-dataset-dir|--val-dir VAL_DATASET_PATH] [--max-steps|-s STEPS] [--max-epochs|-e EPOCHS] [--save-every|-S INTERVAL] [--patience|-p PATIENCE] [--validation-interval|-v INTERVAL] [--train-cfm] [--train-ar] [--distill] [--distill-ar] [--distill-cfm] [--min-lr MIN_LR] [--loss-log-interval L0SS_LOG_INTERVAL] [--initial-lr INITIAL_LR] [--warmup-steps WARMUP_STEPS] [--pretrained-ckpt CKPT_PATH] [--pretrained-cfm-ckpt CFM_CKPT_PATH] [--pretrained-ar-ckpt AR_CKPT_PATH] [--batch-size|-b BATCH_SIZE] [--num-workers|-w NUM_WORKERS]"
             echo "  --gpu|-G        使用 GPU 运行（如果可用） (默认使用 CPU)"
             echo "  --v1            运行 V1 版本 (默认)"
             echo "  --v2            运行 V2 版本"
@@ -348,6 +364,9 @@ while [[ $# -gt 0 ]]; do
             echo "  --grad-clip-norm        设置梯度裁剪范数 (默认: 1.0)"
             echo "  --distill-temperature   设置蒸馏温度 (默认: 1.0)"
             echo "  --cfm-scale             设置CFM缩放因子 (V2版本特有，默认: 1.0)"
+            
+            echo "  --batch-size|-b         设置批处理大小 (默认: 4)"
+            echo "  --num-workers|-w        设置工作线程数 (默认: 0)"
             
             echo "  -I, --interactive 交互式选择参数"
             exit 1
@@ -669,6 +688,26 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
         echo "CFM缩放因子: $CFM_SCALE"
     fi
     
+    # 询问批处理大小
+    echo ""
+    echo "=== 批处理参数 ==="
+    read -p "请输入批处理大小 (默认: 4): " batch_size_input
+    if [[ -n "$batch_size_input" ]]; then
+        BATCH_SIZE="$batch_size_input"
+    else
+        BATCH_SIZE=4
+    fi
+    echo "批处理大小: $BATCH_SIZE"
+    
+    # 询问工作线程数
+    read -p "请输入工作线程数 (默认: 0): " num_workers_input
+    if [[ -n "$num_workers_input" ]]; then
+        NUM_WORKERS="$num_workers_input"
+    else
+        NUM_WORKERS=0
+    fi
+    echo "工作线程数: $NUM_WORKERS"
+    
     # 如果是V2版本，询问训练目标
     if [[ "$VERSION" = "v2" ]]; then
         echo ""
@@ -803,7 +842,9 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
         echo "日志文件: 不保存日志文件"
     fi
     
-
+    # 显示批处理参数
+    echo "批处理大小: $BATCH_SIZE"
+    echo "工作线程数: $NUM_WORKERS"
     
     # 生成等效的非交互式命令行命令
     echo ""
@@ -922,6 +963,10 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
         CMD+=" --cfm-scale $CFM_SCALE"
     fi
     
+    # 添加批处理参数
+    CMD+=" --batch-size $BATCH_SIZE"
+    CMD+=" --num-workers $NUM_WORKERS"
+    
     if [[ "$VERSION" = "v2" ]]; then
         if [[ -n "$TRAIN_CFM_ARG" ]]; then
             CMD+=" $TRAIN_CFM_ARG"
@@ -992,11 +1037,11 @@ if [ "$VERSION" = "v1" ]; then
     TRAIN_ARGS="$CONFIG_PARAM \
         --dataset-dir $DATASET_DIR \
         --run-name $RUN_NAME \
-        --batch-size 8 \
+        --batch-size $BATCH_SIZE \
         --max-steps $MAX_STEPS \
         --max-epochs $MAX_EPOCHS \
         --save-every $SAVE_EVERY \
-        --num-workers 0 \
+        --num-workers $NUM_WORKERS \
         --patience $PATIENCE \
         --validation-interval $VALIDATION_INTERVAL \
         --min-lr $MIN_LR \
@@ -1111,11 +1156,11 @@ else
         run_with_logging python $V2_SCRIPT $CONFIG_PARAM \
             --dataset-dir $DATASET_DIR \
             --run-name $RUN_NAME \
-            --batch-size 8 \
+            --batch-size $BATCH_SIZE \
             --max-steps $MAX_STEPS \
             --max-epochs $MAX_EPOCHS \
             --save-every $SAVE_EVERY \
-            --num-workers 0 \
+            --num-workers $NUM_WORKERS \
             $V2_TRAIN_ARGS
     else
         export FORCE_CPU=0
@@ -1125,11 +1170,11 @@ else
             run_with_logging accelerate launch $V2_SCRIPT $CONFIG_PARAM \
                 --dataset-dir $DATASET_DIR \
                 --run-name $RUN_NAME \
-                --batch-size 1 \
+                --batch-size $BATCH_SIZE \
                 --max-steps $MAX_STEPS \
                 --max-epochs $MAX_EPOCHS \
                 --save-every $SAVE_EVERY \
-                --num-workers 0 \
+                --num-workers $NUM_WORKERS \
                 $V2_TRAIN_ARGS
         else
             # 检查是否有NVIDIA GPU可用
@@ -1138,11 +1183,11 @@ else
                 run_with_logging accelerate launch $V2_SCRIPT $CONFIG_PARAM \
                     --dataset-dir $DATASET_DIR \
                     --run-name $RUN_NAME \
-                    --batch-size 1 \
+                    --batch-size $BATCH_SIZE \
                     --max-steps $MAX_STEPS \
                     --max-epochs $MAX_EPOCHS \
                     --save-every $SAVE_EVERY \
-                    --num-workers 0 \
+                    --num-workers $NUM_WORKERS \
                     $V2_TRAIN_ARGS
             else
                 # 回退到CPU运行
@@ -1150,11 +1195,11 @@ else
                 run_with_logging python $V2_SCRIPT $CONFIG_PARAM \
                     --dataset-dir $DATASET_DIR \
                     --run-name $RUN_NAME \
-                    --batch-size 1 \
+                    --batch-size $BATCH_SIZE \
                     --max-steps $MAX_STEPS \
                     --max-epochs $MAX_EPOCHS \
                     --save-every $SAVE_EVERY \
-                    --num-workers 0 \
+                    --num-workers $NUM_WORKERS \
                     $V2_TRAIN_ARGS
             fi
         fi
