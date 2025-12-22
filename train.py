@@ -1578,7 +1578,7 @@ class Trainer:
         print(f"Best model saved at {save_path}")
         # 同时保存 文本内容： f'DiT_epoch_{save_epoch:05d}_step_{self.iters:05d}.pth' 到 best_model_log.txt文件
         with open(os.path.join(self.log_dir, 'best_model_log.txt'), 'w') as f:
-            f.write(f'DiT_epoch_{self.epoch:05d}_step_{self.iters:05d}.pth')
+            f.write(f'DiT_epoch_{self.epoch:05d}_step_{self.iters:05d}.pth\n{self.best_val_loss}\n')
 
     def _save_checkpoint(self):
         print('Saving..')

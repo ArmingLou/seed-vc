@@ -184,6 +184,7 @@ show_help() {
     echo "      --gpu                    使用GPU运行（如果可用）  (默认使用CPU)"
     echo "      --fp16                   使用fp16精度 (默认: false)"
     echo "      --language LANG          指定语言参数 (例如: zh, yue, en)"
+    echo "      --steps STEPS            控制扩散步数 (默认: 100)"
     echo ""
     echo "V1版本专用参数:"
     echo "  -S, --song                   使用V1的歌声转换"
@@ -261,6 +262,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --language)
             LANGUAGE="$2"
+            shift 2
+            ;;
+        --steps)
+            DIFFUSION_STEPS="$2"
             shift 2
             ;;
         -A|--auto-f0-adjust)
@@ -408,6 +413,15 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
         echo "已禁用fp16精度"
     fi
     
+    # 询问扩散步数
+    read -p "请输入扩散步数 (默认: 100): " steps_input
+    if [[ -n "$steps_input" ]]; then
+        DIFFUSION_STEPS="$steps_input"
+    else
+        DIFFUSION_STEPS=100
+    fi
+    echo "已设置扩散步数: $DIFFUSION_STEPS"
+    
     # 根据版本选择显示不同的参数选项
     if [[ "$VERSION" = "v1" ]]; then
         # V1版本特有的参数
@@ -551,6 +565,7 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
         fi
     fi
     
+    
     # 显示所有选择的参数并请求确认
     echo ""
     echo "=== 参数确认 ==="
@@ -605,6 +620,7 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     fi
 
     echo "语言参数: $LANGUAGE"
+    echo "扩散步数: $DIFFUSION_STEPS"
 
     # 生成等效的非交互式命令行命令
     echo ""
@@ -664,6 +680,10 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
 
     if [[ -n "$LANGUAGE" ]]; then
         CMD+=" --language $LANGUAGE"
+    fi
+
+    if [[ "$DIFFUSION_STEPS" != "100" ]]; then
+        CMD+=" --steps $DIFFUSION_STEPS"
     fi
 
     echo "$CMD"
@@ -958,6 +978,8 @@ for audio_file in "${AUDIO_FILES[@]}"; do
             --diffusion-steps $DIFFUSION_STEPS \
             --intelligibility-cfg-rate $INTELLIGIBILITY_RATE \
             --similarity-cfg-rate $SIMILARITY_RATE \
+            --top-p 0.1 \
+            --temperature 0.1 \
             --fp16 $FP16"
         
         # 添加checkpoint参数（如果指定）

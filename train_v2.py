@@ -1109,7 +1109,7 @@ class Trainer:
             print(f"Best AR model saved at {save_path}")
             # 同时保存 文本内容：
             with open(os.path.join(self.log_dir, 'ar_best_log.txt'), 'w') as f:
-                f.write(f'AR_epoch_{self.epoch:05d}_step_{self.iters:05d}.pth')
+                f.write(f'AR_epoch_{self.epoch:05d}_step_{self.iters:05d}.pth\n{self.best_val_loss}\n')
         
         if self.train_cfm:
             state = {
@@ -1124,7 +1124,7 @@ class Trainer:
             print(f"Best CFM model saved at {save_path}")
             # 同时保存 文本内容：
             with open(os.path.join(self.log_dir, 'cfm_best_log.txt'), 'w') as f:
-                f.write(f'CFM_epoch_{self.epoch:05d}_step_{self.iters:05d}.pth')
+                f.write(f'CFM_epoch_{self.epoch:05d}_step_{self.iters:05d}.pth\n{self.best_val_loss}\n')
 
     def train(self):
         """Main training loop"""

@@ -295,9 +295,10 @@ def main(args):
                 anonymization_only = gr.Checkbox(label="anonymization only", value=False)
         
         examples = [
-            [None, "examples/reference/wise_9347.mp3", 100, 1.0, 1.0, 0.0, 0.9, 1.0, 1.0, False, False],
-            [None, "examples/reference/wise_9494.mp3", 100, 1.0, 1.0, 0.0, 0.9, 1.0, 1.0, False, False],
-            [None, "examples/reference/wise_9495.mp3", 100, 1.0, 1.0, 0.0, 0.9, 1.0, 1.0, False, False],
+            [None, "examples/reference/wise_11806.mp3", 100, 1.0, 1.0, 0.0, 0.1, 0.1, 1.0, False, False],
+            [None, "examples/reference/wise_9347.mp3", 100, 1.0, 1.0, 0.0, 0.1, 0.1, 1.0, False, False],
+            [None, "examples/reference/wise_9494.mp3", 100, 1.0, 1.0, 0.0, 0.1, 0.1, 1.0, False, False],
+            [None, "examples/reference/wise_9495.mp3", 100, 1.0, 1.0, 0.0, 0.1, 0.1, 1.0, False, False],
             ["examples/source/yae_0.wav", "examples/reference/dingzhen_0.wav", 50, 1.0, 0.5, 0.5, 0.9, 1.0, 1.0, False, False],
             ["examples/source/jay_0.wav", "examples/reference/azuma_0.wav", 50, 1.0, 0.5, 0.5, 0.9, 1.0, 1.0, False, False],
         ]
