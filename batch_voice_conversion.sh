@@ -436,6 +436,29 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     fi
     echo "已设置扩散步数: $DIFFUSION_STEPS"
     
+    # 询问粤语声调修正参数
+    read -p "是否指定粤语声调修正文件 (--yue-fix)？(y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo "请选择粤语声调修正文件:"
+        SELECTED_YUE_FIX=$(select_any_file "请选择粤语声调修正文件" "/Users/arming/Downloads")
+        if [[ -n "$SELECTED_YUE_FIX" ]]; then
+            YUE_FIX="$SELECTED_YUE_FIX"
+            echo "已选择粤语声调修正文件: $YUE_FIX"
+            
+            # 询问修正强度
+            read -p "请输入修正强度 (0.0~1.0, 默认: 0.8): " yue_fix_strength_input
+            if [[ -n "$yue_fix_strength_input" ]]; then
+                YUE_FIX_STRENGTH="$yue_fix_strength_input"
+            else
+                YUE_FIX_STRENGTH=0.8
+            fi
+            echo "已设置修正强度: $YUE_FIX_STRENGTH"
+        else
+            echo "未指定粤语声调修正文件"
+        fi
+    fi
+    
     # 根据版本选择显示不同的参数选项
     if [[ "$VERSION" = "v1" ]]; then
         # V1版本特有的参数
@@ -633,6 +656,12 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
         echo "配置文件: $CONFIG"
     fi
 
+    # 显示粤语声调修正参数
+    if [[ -n "$YUE_FIX" ]]; then
+        echo "粤语声调修正文件: $YUE_FIX"
+        echo "粤语声调修正强度: $YUE_FIX_STRENGTH"
+    fi
+    
     echo "语言参数: $LANGUAGE"
     echo "扩散步数: $DIFFUSION_STEPS"
 
@@ -651,6 +680,11 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     
     if [[ -n "$CONFIG" ]]; then
         CMD+=" --config \"$CONFIG\""
+    fi
+    
+    # 添加粤语声调修正参数
+    if [[ -n "$YUE_FIX" ]]; then
+        CMD+=" --yue-fix \"$YUE_FIX\" --yue-fix-strength $YUE_FIX_STRENGTH"
     fi
 
     if [[ "$VERSION" = "v1" ]]; then
