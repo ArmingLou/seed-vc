@@ -62,6 +62,7 @@ class Trainer:
             cfm_scale=1.0, # ar 和 cfm 同时训练时，提供一个参数可以手动调节 cfm模型 的训练权重。
             # 配对训练参数 - 用于固定源说话人→固定目标说话人的场景
             source_dir=None,  # 源说话人音频目录（可选）
+            train_f0_only=False,  # 只训练 F0 embedding，冻结其他权重
         ):
         self.config_path = config_path
         self.mixed_precision = mixed_precision
@@ -88,6 +89,11 @@ class Trainer:
         self.paired_mode = source_dir is not None
         if self.paired_mode:
             print(f"启用配对训练模式: source={source_dir}, target={data_dir}")
+        
+        # F0 only 训练模式
+        self.train_f0_only = train_f0_only
+        if train_f0_only:
+            print("启用 F0 only 训练模式：只训练 F0 embedding，冻结 CFM 其他权重")
         
         # Check FORCE_CPU environment variable
         force_cpu = os.environ.get('FORCE_CPU', '0') == '1'
@@ -616,10 +622,27 @@ class Trainer:
             for p in self.model.parameters():
                 p.requires_grad = False
             if train_cfm:
-                for p in self.model.cfm.parameters():
-                    p.requires_grad = True
-                for p in self.model.cfm_length_regulator.parameters():
-                    p.requires_grad = True
+                # F0 only 模式：只训练 f0_embedding，冻结其他权重
+                if self.train_f0_only:
+                    # 检查是否启用了 F0 条件
+                    if not self.f0_condition:
+                        raise ValueError("--train-f0-only 需要配置中启用 f0_condition")
+                    # 只训练 cfm_length_regulator 中的 f0 相关参数
+                    for name, p in self.model.cfm_length_regulator.named_parameters():
+                        if 'f0' in name:
+                            p.requires_grad = True
+                            print(f"F0 only 模式: 训练参数 {name}")
+                        else:
+                            p.requires_grad = False
+                    # cfm 主体冻结
+                    for p in self.model.cfm.parameters():
+                        p.requires_grad = False
+                else:
+                    # 正常模式：训练所有 CFM 参数
+                    for p in self.model.cfm.parameters():
+                        p.requires_grad = True
+                    for p in self.model.cfm_length_regulator.parameters():
+                        p.requires_grad = True
             if train_ar:
                 for p in self.model.ar.parameters():
                     p.requires_grad = True
@@ -1940,6 +1963,8 @@ def main(args):
         cfm_scale=args.cfm_scale,
         # 配对训练参数
         source_dir=args.source_dir,
+        # F0 only 训练模式
+        train_f0_only=args.train_f0_only,
     )
     # 添加fp16错误处理
     try:
@@ -1972,6 +1997,8 @@ if __name__ == '__main__':
     parser.add_argument('--num-workers', type=int, default=0)
     parser.add_argument('--train-cfm', action='store_true', help='Train CFM model')
     parser.add_argument('--train-ar', action='store_true', help='Train AR model')
+    parser.add_argument('--train-f0-only', action='store_true', 
+                       help='只训练 F0 embedding，冻结 CFM 其他权重（用于快速微调 F0 功能）')
     parser.add_argument('--fp16', action='store_true', help='Use fp16 precision')
     
     # 验证集相关参数

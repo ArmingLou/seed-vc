@@ -146,6 +146,9 @@ NUM_WORKERS=0
 SOURCE_DIR=""
 RANDOM_REFERENCE=false
 
+# F0 only 训练模式（V2版本特有）
+TRAIN_F0_ONLY=false
+
 # 日志文件路径
 LOG_FILE=""
 
@@ -342,6 +345,12 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
 
+        --train-f0-only)
+            TRAIN_F0_ONLY=true
+            echo "启用 F0 only 训练模式"
+            shift
+            ;;
+
         *)
             echo "未知参数: $1"
             echo "用法: $0 [--gpu|-G] [--v1|--v2] [--run-name|-n NAME] [--config|-c CONFIG_PATH] [--dataset-dir|-d DATASET_PATH] [--val-dataset-dir|--val-dir VAL_DATASET_PATH] [--max-steps|-s STEPS] [--max-epochs|-e EPOCHS] [--save-every|-S INTERVAL] [--patience|-p PATIENCE] [--validation-interval|-v INTERVAL] [--train-cfm] [--train-ar] [--distill] [--distill-ar] [--distill-cfm] [--min-lr MIN_LR] [--loss-log-interval L0SS_LOG_INTERVAL] [--initial-lr INITIAL_LR] [--warmup-steps WARMUP_STEPS] [--pretrained-ckpt CKPT_PATH] [--pretrained-cfm-ckpt CFM_CKPT_PATH] [--pretrained-ar-ckpt AR_CKPT_PATH] [--batch-size|-b BATCH_SIZE] [--num-workers|-w NUM_WORKERS]"
@@ -359,6 +368,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --validation-interval|-v 设置验证间隔step (默认: 10，建议约验证样本数/batch_size)"
             echo "  --train-cfm     训练 CFM 模型 (仅 V2)"
             echo "  --train-ar      训练 AR 模型 (仅 V2)"
+            echo "  --train-f0-only 只训练 F0 embedding，冻结其他权重 (仅 V2)"
             echo "  --fp16          使用 FP16 精度 (默认: false)"
             echo "  --distill       设置知识蒸馏权重 (V1版本，默认: 0.0)"
             echo "  --distill-ar    设置 AR 模型知识蒸馏权重 (V2版本，默认: 0.0)"
@@ -1162,6 +1172,11 @@ else
     fi
     if [[ "$RANDOM_REFERENCE" = true ]]; then
         V2_TRAIN_ARGS+=" --random-reference"
+    fi
+    
+    # 添加 F0 only 训练参数
+    if [[ "$TRAIN_F0_ONLY" = true ]]; then
+        V2_TRAIN_ARGS+=" --train-f0-only"
     fi
     
     # 使用统一的训练脚本
