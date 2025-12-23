@@ -52,6 +52,10 @@ class VoiceConversionWrapper(torch.nn.Module):
         self.ar_max_content_len = 1500  # in num of narrow tokens
         self.compile_len = 87 * self.dit_max_context_len
         self.use_ar_for_cfm_training = False  # 是否使用 AR 生成 wide tokens（单独训练 CFM 时为 True）
+        
+        # 检测 F0 条件是否启用（根据 length_regulator 配置）
+        self.f0_condition = getattr(cfm_length_regulator, 'f0_condition', False)
+        self.rmvpe = None  # F0 提取器，在 load_checkpoints 中初始化
 
     def forward_cfm(self, content_indices_wide, content_lens, mels, mel_lens, style_vectors, f0=None):
         device = content_indices_wide.device
@@ -551,10 +555,46 @@ class VoiceConversionWrapper(torch.nn.Module):
         style_encoder_checkpoint = torch.load(style_encoder_checkpoint_path, map_location="cpu")
         self.style_encoder.load_state_dict(style_encoder_checkpoint, strict=False)
         
+        # 如果启用了 F0 条件，初始化 RMVPE F0 提取器（用于推理）
+        if self.f0_condition and self.rmvpe is None:
+            try:
+                from modules.rmvpe import RMVPE
+                print("F0 condition enabled, initializing RMVPE for inference...")
+                rmvpe_path = load_custom_model_from_hf("lj1995/VoiceConversionWebUI", "rmvpe.pt", None)
+                self.rmvpe = RMVPE(rmvpe_path, is_half=False, device="cpu")
+                print("RMVPE initialized for F0 extraction")
+            except Exception as e:
+                print(f"Warning: Failed to initialize RMVPE: {e}")
+                self.rmvpe = None
+        
         return training_state
 
     def setup_ar_caches(self, max_batch_size=1, max_seq_len=4096, dtype=torch.float32, device=torch.device("cpu")):
         self.ar.setup_caches(max_batch_size=max_batch_size, max_seq_len=max_seq_len, dtype=dtype, device=device)
+    
+    @torch.no_grad()
+    def extract_f0(self, audio_16k: np.ndarray, device: torch.device = torch.device("cpu")):
+        """
+        使用 RMVPE 提取 F0。
+        
+        Args:
+            audio_16k: 16kHz 音频 numpy 数组
+            device: 设备
+            
+        Returns:
+            f0: F0 tensor，如果未启用 F0 条件或 RMVPE 未初始化则返回 None
+        """
+        if not self.f0_condition or self.rmvpe is None:
+            return None
+        
+        try:
+            # RMVPE 需要 16kHz 音频
+            f0 = self.rmvpe.infer_from_audio(audio_16k, thred=0.03)
+            f0 = torch.from_numpy(f0).float().unsqueeze(0).to(device)
+            return f0
+        except Exception as e:
+            print(f"Warning: Failed to extract F0: {e}")
+            return None
 
     @torch.no_grad()
     def compute_style(self, waves_16k: torch.Tensor, wave_lens_16k: torch.Tensor = None):
@@ -767,6 +807,8 @@ class VoiceConversionWrapper(torch.nn.Module):
             device: torch.device = torch.device("cpu"),
             dtype: torch.dtype = torch.float32,
             stream_output: bool = True,
+            yue_fix: str = None,
+            yue_fix_strength: float = 0.8,
     ):
         """
         Convert voice with streaming support for long audio files.
@@ -784,6 +826,8 @@ class VoiceConversionWrapper(torch.nn.Module):
             device: Device to use (default: cpu)
             dtype: Data type to use (default: float32)
             stream_output: Whether to stream the output (default: True)
+            yue_fix: Path to Cantonese pronunciation fix file (default: None)
+            yue_fix_strength: Strength of Cantonese tone correction (default: 0.8)
             
         Returns:
             If stream_output is True, yields (mp3_bytes, full_audio) tuples
@@ -811,6 +855,32 @@ class VoiceConversionWrapper(torch.nn.Module):
         source_mel_len = source_mel.size(2)
         target_mel_len = target_mel.size(2)
         
+        # 提取 F0（如果启用）
+        source_f0 = self.extract_f0(source_wave_16k, device) if self.f0_condition else None
+        
+        # 应用粤语声调修正（如果指定了 yue_fix 文件）
+        if yue_fix is not None and source_f0 is not None:
+            try:
+                from modules.yue_fix import apply_yue_fix
+                print(f"应用粤语修正: {yue_fix} (强度: {yue_fix_strength})")
+                # 将 F0 转为 numpy 进行修正
+                f0_numpy = source_f0[0].cpu().numpy()
+                f0_corrected = apply_yue_fix(
+                    audio=None,  # 暂不使用音频
+                    f0=f0_numpy,
+                    fix_file_path=yue_fix,
+                    sr=16000,  # F0 是基于 16kHz 音频提取的
+                    hop_length=160,  # RMVPE hop_length
+                    strength=yue_fix_strength,
+                    smooth=True
+                )
+                source_f0 = torch.from_numpy(f0_corrected).float().to(device)[None]
+                print("粤语声调修正已应用")
+            except Exception as e:
+                print(f"警告: 应用粤语修正失败: {e}")
+        elif yue_fix is not None and source_f0 is None:
+            print("警告: --yue-fix 需要配置中启用 f0_condition 才能生效")
+        
         # Set up chunk processing parameters
         max_context_window = self.sr // self.hop_size * self.dit_max_context_len
         overlap_wave_len = self.overlap_frame_len * self.hop_size
@@ -824,7 +894,8 @@ class VoiceConversionWrapper(torch.nn.Module):
             # Compute style features
             target_style = self.compute_style(target_wave_16k_tensor)
             prompt_condition, _, = self.cfm_length_regulator(target_content_indices,
-                                                             ylens=torch.LongTensor([target_mel_len]).to(device))
+                                                             ylens=torch.LongTensor([target_mel_len]).to(device),
+                                                             f0=None)  # prompt 不需要 F0
         else:
             # 其他设备使用autocast
             with torch.autocast(device_type=device.type, dtype=dtype):
@@ -834,7 +905,8 @@ class VoiceConversionWrapper(torch.nn.Module):
                 # Compute style features
                 target_style = self.compute_style(target_wave_16k_tensor)
                 prompt_condition, _, = self.cfm_length_regulator(target_content_indices,
-                                                                 ylens=torch.LongTensor([target_mel_len]).to(device))
+                                                                 ylens=torch.LongTensor([target_mel_len]).to(device),
+                                                                 f0=None)  # prompt 不需要 F0
 
         # prepare for streaming
         generated_wave_chunks = []
@@ -942,7 +1014,7 @@ class VoiceConversionWrapper(torch.nn.Module):
                 if should_break:
                     break
         else:
-            cond, _ = self.cfm_length_regulator(source_content_indices, ylens=torch.LongTensor([source_mel_len]).to(device))
+            cond, _ = self.cfm_length_regulator(source_content_indices, ylens=torch.LongTensor([source_mel_len]).to(device), f0=source_f0)
 
             # Process in chunks for streaming
             max_source_window = max_context_window - target_mel.size(2)

@@ -116,7 +116,9 @@ def convert_voice_v2(source_audio_path, target_audio_path, args):
             anonymization_only=args.anonymization_only,
             device=device,
             dtype=dtype,
-            stream_output=True
+            stream_output=True,
+            yue_fix=getattr(args, 'yue_fix', None),
+            yue_fix_strength=getattr(args, 'yue_fix_strength', 0.8),
         )
 
         # Collect all outputs from the generator
@@ -143,7 +145,9 @@ def convert_voice_v2(source_audio_path, target_audio_path, args):
                 anonymization_only=args.anonymization_only,
                 device=device,
                 dtype=dtype,
-                stream_output=True
+                stream_output=True,
+                yue_fix=getattr(args, 'yue_fix', None),
+                yue_fix_strength=getattr(args, 'yue_fix_strength', 0.8),
             )
 
             # Collect all outputs from the generator
@@ -314,6 +318,12 @@ if __name__ == "__main__":
                         help="Path to custom checkpoint file")
     parser.add_argument("--fp16", type=str2bool, default=False,
                         help="Use fp16 precision for inference")
+    
+    # 粤语后处理修正参数
+    parser.add_argument("--yue-fix", type=str, default=None, 
+                        help="Path to Cantonese pronunciation fix file (requires f0_condition in config)")
+    parser.add_argument("--yue-fix-strength", type=float, default=0.8,
+                        help="Strength of Cantonese tone correction (0.0-1.0, default: 0.8)")
 
     args = parser.parse_args()
     main(args)
