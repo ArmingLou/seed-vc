@@ -362,6 +362,12 @@ def crossfade(chunk1, chunk2, overlap):
 
 @torch.no_grad()
 def main(args):
+    # 参数验证
+    if args.yue_fix is not None and not args.f0_condition:
+        print("警告: --yue-fix 需要启用 --f0-condition True 才能生效")
+        print("已自动启用 f0-condition")
+        args.f0_condition = True
+    
     model, semantic_fn, f0_fn, vocoder_fn, campplus_model, mel_fn, mel_fn_args = load_models(args)
     sr = mel_fn_args['sampling_rate']
     f0_condition = args.f0_condition
@@ -464,6 +470,24 @@ def main(args):
         shifted_f0_alt = torch.exp(shifted_log_f0_alt)
         if pitch_shift != 0:
             shifted_f0_alt[F0_alt > 1] = adjust_f0_semitones(shifted_f0_alt[F0_alt > 1], pitch_shift)
+        
+        # 粤语声调后处理修正
+        if args.yue_fix is not None:
+            from modules.yue_fix import apply_yue_fix
+            print(f"应用粤语修正: {args.yue_fix} (强度: {args.yue_fix_strength})")
+            # 将 shifted_f0_alt 转为 numpy 进行修正
+            f0_numpy = shifted_f0_alt[0].cpu().numpy()
+            f0_corrected = apply_yue_fix(
+                audio=None,  # 暂不使用音频
+                f0=f0_numpy,
+                fix_file_path=args.yue_fix,
+                sr=sr,
+                hop_length=hop_length,
+                strength=args.yue_fix_strength,
+                smooth=True
+            )
+            shifted_f0_alt = torch.from_numpy(f0_corrected).float().to(device)[None]
+            print("粤语声调修正已应用")
     else:
         F0_ori = None
         F0_alt = None
@@ -561,5 +585,10 @@ if __name__ == "__main__":
     parser.add_argument("--config", type=str, help="Path to the config file", default=None)
     parser.add_argument("--fp16", type=str2bool, default=True)
     parser.add_argument("--language", type=str, default=None, help="Language for Whisper model")
+    # 粤语后处理修正参数
+    parser.add_argument("--yue-fix", type=str, default=None, 
+                        help="Path to Cantonese pronunciation fix file (requires --f0-condition True)")
+    parser.add_argument("--yue-fix-strength", type=float, default=0.8,
+                        help="Strength of Cantonese tone correction (0.0-1.0, default: 0.8)")
     args = parser.parse_args()
     main(args)
