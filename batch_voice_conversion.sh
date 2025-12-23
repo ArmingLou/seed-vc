@@ -161,6 +161,8 @@ F0_CONDITION="False"      # V1版本的--f0-condition，默认False
 AUTO_F0_ADJUST="False"    # V1版本的--auto-f0-adjust，默认False
 FP16="False"                # 是否使用fp16精度，默认false
 LANGUAGE=""                 # 语言参数
+YUE_FIX=""                  # 粤语声调修正文件路径 (V1)
+YUE_FIX_STRENGTH=0.8        # 粤语声调修正强度 (V1)
 
 # 新增参数
 CHECKPOINT=""            # 模型检查点路径
@@ -200,6 +202,10 @@ show_help() {
     echo "  -f, --cfm-checkpoint PATH    指定 CFM 模型检查点路径"
     echo "  -a, --ar-checkpoint PATH     指定 AR 模型检查点路径"
     echo "  -c, --config PATH            指定模型配置文件路径"
+    echo ""
+    echo "粤语声调修正参数 (V1/V2 通用):"
+    echo "      --yue-fix PATH           粤语声调修正文件路径"
+    echo "      --yue-fix-strength VAL   粤语声调修正强度 (默认: 0.8, 范围 0.0~1.0)"
     echo ""
     echo "其他选项:"
     echo "  -h, --help                   显示此帮助信息"
@@ -262,6 +268,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --language)
             LANGUAGE="$2"
+            shift 2
+            ;;
+        --yue-fix)
+            YUE_FIX="$2"
+            shift 2
+            ;;
+        --yue-fix-strength)
+            YUE_FIX_STRENGTH="$2"
             shift 2
             ;;
         --steps)
@@ -959,6 +973,11 @@ for audio_file in "${AUDIO_FILES[@]}"; do
             CMD="$CMD --language $LANGUAGE"
         fi
         
+        # 添加粤语声调修正参数
+        if [[ -n "$YUE_FIX" ]]; then
+            CMD="$CMD --yue-fix \"$YUE_FIX\" --yue-fix-strength $YUE_FIX_STRENGTH"
+        fi
+        
         # 添加checkpoint和config参数（如果指定）
         if [[ -n "$CHECKPOINT" ]]; then
             CMD="$CMD --checkpoint \"$CHECKPOINT\""
@@ -991,6 +1010,11 @@ for audio_file in "${AUDIO_FILES[@]}"; do
         fi
         if [[ -n "$CONFIG" ]]; then
             CMD="$CMD --config \"$CONFIG\""
+        fi
+        
+        # 添加粤语声调修正参数
+        if [[ -n "$YUE_FIX" ]]; then
+            CMD="$CMD --yue-fix \"$YUE_FIX\" --yue-fix-strength $YUE_FIX_STRENGTH"
         fi
         
         # 执行命令
