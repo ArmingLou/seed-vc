@@ -83,6 +83,62 @@ class VoiceConversionWrapper(torch.nn.Module):
         cond, _ = self.ar_length_regulator(duration_reduced_narrow_tokens, f0=f0)
         loss, logits = self.ar(cond, duration_reduced_narrow_lens, content_indices_wide, content_lens)
         return loss, logits
+    
+    def predict_wide_tokens_with_ar(self, content_indices_narrow, content_lens, f0=None):
+        """
+        使用冻结的 AR 模型预测 wide tokens（teacher forcing 模式，非自回归生成）。
+        
+        用于单独训练 CFM 时，让 CFM 训练时使用的 wide tokens 与推理一致。
+        
+        Args:
+            content_indices_narrow: narrow tokens [B, T_narrow]
+            content_lens: wide tokens 的目标长度 [B]
+            f0: 可选的 F0 条件
+            
+        Returns:
+            predicted_wide_tokens: 预测的 wide tokens [B, T_wide]
+        """
+        device = content_indices_narrow.device
+        batch_size = content_indices_narrow.size(0)
+        
+        # Duration reduction
+        duration_reduced_narrow_tokens = []
+        duration_reduced_narrow_lens = []
+        for bib in range(batch_size):
+            reduced, reduced_len = self.duration_reduction_func(content_indices_narrow[bib])
+            duration_reduced_narrow_tokens.append(reduced)
+            duration_reduced_narrow_lens.append(reduced_len)
+        duration_reduced_narrow_tokens = torch.nn.utils.rnn.pad_sequence(
+            duration_reduced_narrow_tokens, batch_first=True, padding_value=0
+        ).to(device)
+        duration_reduced_narrow_lens = torch.LongTensor(duration_reduced_narrow_lens).to(device)
+        
+        # 通过 length regulator 处理
+        cond, _ = self.ar_length_regulator(duration_reduced_narrow_tokens, f0=f0)
+        
+        # 需要一个 dummy target 来获取 logits（teacher forcing）
+        # 使用全零作为输入，但实际上只需要 logits
+        max_content_len = content_lens.max().item()
+        dummy_target = torch.zeros(batch_size, max_content_len, dtype=torch.long, device=device)
+        
+        # 获取 AR logits
+        with torch.no_grad():
+            _, logits = self.ar(cond, duration_reduced_narrow_lens, dummy_target, content_lens)
+        
+        # 从 logits 中提取预测的 wide tokens
+        # logits 结构: [B, seq_len, vocab_size]
+        # 预测位置: cond_lens + 1 到 cond_lens + target_lens + 1
+        predicted_wide_tokens = torch.zeros(batch_size, max_content_len, dtype=torch.long, device=device)
+        for bib in range(batch_size):
+            cond_len = duration_reduced_narrow_lens[bib].item()
+            target_len = content_lens[bib].item()
+            # +1 是因为有 sep_token
+            start_pos = cond_len + 1
+            end_pos = cond_len + 1 + target_len
+            # 取 argmax 得到预测的 tokens
+            predicted_wide_tokens[bib, :target_len] = logits[bib, start_pos:end_pos].argmax(dim=-1)
+        
+        return predicted_wide_tokens
 
     def forward(self, waves_16k, mels, wave_lens_16k, mel_lens, forward_ar=False, forward_cfm=True, f0=None):
         """
@@ -109,23 +165,21 @@ class VoiceConversionWrapper(torch.nn.Module):
         else:
             loss_ar = torch.tensor(0.0, device=waves_16k.device, dtype=waves_16k.dtype)
         if forward_cfm:
-            # 单独训练 CFM 时，使用 AR 预测的 wide tokens（而不是直接用 content_extractor_wide）
-            if self.use_ar_for_cfm_training and not forward_ar:
-                # 提取 narrow tokens 并使用 AR 预测 wide tokens
+            # 单独训练 CFM 时（use_ar_for_cfm_training=True），使用冻结的 AR 预测 wide tokens
+            # 这样可以保证训练和推理的 wide tokens 分布一致
+            if self.use_ar_for_cfm_training:
+                # 提取 narrow tokens
                 with torch.no_grad():
                     _, content_indices_narrow, _ = self.content_extractor_narrow(
-                        waves_16k, wave_lens_16k, ssl_model=self.content_extractor_wide.ssl_model
+                        waves_16k, wave_lens_16k, 
+                        ssl_model=self.content_extractor_wide.ssl_model
                     )
-                    # 使用 AR 的 teacher forcing 输出（argmax logits）作为预测的 wide tokens
-                    _, ar_logits = self.forward_ar(
-                        content_indices_narrow.clone(), 
-                        content_indices_wide.clone(),  # 仍需要 ground truth 做 teacher forcing
-                        content_lens, 
-                        f0=f0
+                    # 使用冻结的 AR 预测 wide tokens
+                    content_indices_wide_for_cfm = self.predict_wide_tokens_with_ar(
+                        content_indices_narrow, content_lens, f0=f0
                     )
-                    # argmax 得到预测的 wide tokens
-                    content_indices_wide_for_cfm = ar_logits.argmax(dim=-1)
             else:
+                # 正常模式：直接使用 content_extractor_wide 的输出
                 content_indices_wide_for_cfm = content_indices_wide
             
             style_vectors = self.compute_style(waves_16k, wave_lens_16k)

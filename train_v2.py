@@ -710,7 +710,7 @@ class Trainer:
                 # 单独训练 CFM 时也要加载 AR（冻结 AR，用 AR 生成 wide tokens）
                 if not self.train_ar and pretrained_ar_ckpt_path:
                     ar_checkpoint_path = pretrained_ar_ckpt_path
-                    print("单独训练 CFM：加载 AR checkpoint（冻结）")
+                    print(f"单独训练 CFM：将加载并冻结 AR checkpoint: {pretrained_ar_ckpt_path}")
             if self.train_ar:
                 ar_checkpoint_path = pretrained_ar_ckpt_path
             
