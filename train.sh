@@ -142,6 +142,10 @@ CFM_SCALE=1.0
 BATCH_SIZE=4
 NUM_WORKERS=0
 
+# 配对训练参数（V2版本特有）
+SOURCE_DIR=""
+RANDOM_REFERENCE=false
+
 # 日志文件路径
 LOG_FILE=""
 
@@ -324,6 +328,18 @@ while [[ $# -gt 0 ]]; do
             NUM_WORKERS="$2"
             echo "设置工作线程数: $NUM_WORKERS"
             shift 2
+            ;;
+
+        --source-dir)
+            SOURCE_DIR="$2"
+            echo "设置源说话人目录（配对训练）: $SOURCE_DIR"
+            shift 2
+            ;;
+
+        --random-reference)
+            RANDOM_REFERENCE=true
+            echo "启用随机参考音频模式"
+            shift
             ;;
 
         *)
@@ -1139,6 +1155,14 @@ else
     
     # 添加CFM缩放因子参数
     V2_TRAIN_ARGS+=" --cfm-scale $CFM_SCALE"
+    
+    # 添加配对训练参数
+    if [[ -n "$SOURCE_DIR" ]]; then
+        V2_TRAIN_ARGS+=" --source-dir $SOURCE_DIR"
+    fi
+    if [[ "$RANDOM_REFERENCE" = true ]]; then
+        V2_TRAIN_ARGS+=" --random-reference"
+    fi
     
     # 使用统一的训练脚本
     V2_SCRIPT="train_v2.py"

@@ -97,7 +97,11 @@ class InterpolateRegulator(nn.Module):
                 quantized_f0 = f0_to_coarse(f0, self.n_f0_bins)
                 quantized_f0 = quantized_f0.clamp(0, self.n_f0_bins - 1).long()
                 f0_emb = self.f0_embedding(quantized_f0)
-                f0_emb = F.interpolate(f0_emb.transpose(1, 2).contiguous(), size=ylens.max(), mode='nearest')
+                # 插值 F0 embedding 到目标长度（处理不同采样率导致的帧率不匹配）
+                # RMVPE: 16kHz, hop=160 -> 100 fps
+                # V2 mel: 22050Hz, hop=256 -> 86.1 fps
+                target_len = ylens.max() if ylens is not None else x.size(2)
+                f0_emb = F.interpolate(f0_emb.transpose(1, 2).contiguous(), size=target_len, mode='nearest')
                 x = x + f0_emb
         out = self.model(x).transpose(1, 2).contiguous()
         out = out * mask if mask is not None else out

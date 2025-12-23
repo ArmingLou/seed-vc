@@ -60,6 +60,8 @@ class Trainer:
             resume_lr=0.0,  # 添加resume_lr参数，默认值为0.0
             language=None,  # 添加language参数，默认值为None
             cfm_scale=1.0, # ar 和 cfm 同时训练时，提供一个参数可以手动调节 cfm模型 的训练权重。
+            # 配对训练参数 - 用于固定源说话人→固定目标说话人的场景
+            source_dir=None,  # 源说话人音频目录（可选）
         ):
         self.config_path = config_path
         self.mixed_precision = mixed_precision
@@ -81,6 +83,11 @@ class Trainer:
         # 保存language参数
         self.language = language
         self.cfm_scale = cfm_scale
+        # 配对训练模式
+        self.source_dir = source_dir
+        self.paired_mode = source_dir is not None
+        if self.paired_mode:
+            print(f"启用配对训练模式: source={source_dir}, target={data_dir}")
         
         # Check FORCE_CPU environment variable
         force_cpu = os.environ.get('FORCE_CPU', '0') == '1'
@@ -544,14 +551,29 @@ class Trainer:
     def _init_dataloader(self, data_dir, batch_size, num_workers, spect_params, sr):
         self.spect_params = spect_params
         self.sr = sr
-        # Initialize dataloader
-        self.train_dataloader = build_ft_dataloader(
-            data_dir,
-            spect_params,
-            self.sr,
-            batch_size=batch_size,
-            num_workers=num_workers,
-        )
+        
+        # 检查是否使用配对训练模式
+        if self.paired_mode:
+            from data.paired_dataset import build_paired_dataloader
+            self.train_dataloader = build_paired_dataloader(
+                target_path=data_dir,
+                spect_params=spect_params,
+                sr=self.sr,
+                batch_size=batch_size,
+                num_workers=num_workers,
+                shuffle=True,
+                source_path=self.source_dir,
+            )
+            print(f"配对数据集已加载: target={data_dir}, source={self.source_dir}")
+        else:
+            # 标准模式 - 自重建训练
+            self.train_dataloader = build_ft_dataloader(
+                data_dir,
+                spect_params,
+                self.sr,
+                batch_size=batch_size,
+                num_workers=num_workers,
+            )
         # 保存数据集引用以便在每个epoch设置随机索引
         self.train_dataset = self.train_dataloader.dataset
 
@@ -572,6 +594,25 @@ class Trainer:
         with self.accelerator.main_process_first():
             cfg = DictConfig(self.config)
             self.model = hydra.utils.instantiate(cfg).to(self.device)
+            
+            # 检查是否启用了 F0 条件（用于粤语等声调语言）
+            self.f0_condition = False
+            if 'cfm_length_regulator' in self.config:
+                self.f0_condition = self.config['cfm_length_regulator'].get('f0_condition', False)
+            if 'ar_length_regulator' in self.config:
+                self.f0_condition = self.f0_condition or self.config['ar_length_regulator'].get('f0_condition', False)
+            
+            # 如果启用了 F0 条件，初始化 RMVPE F0 提取器
+            if self.f0_condition:
+                from modules.rmvpe import RMVPE
+                from hf_utils import load_custom_model_from_hf
+                print("F0 condition enabled, initializing RMVPE F0 extractor...")
+                model_path = load_custom_model_from_hf("lj1995/VoiceConversionWebUI", "rmvpe.pt", None)
+                self.rmvpe = RMVPE(model_path, is_half=False, device=self.device)
+                print("RMVPE F0 extractor initialized")
+            else:
+                self.rmvpe = None
+            
             for p in self.model.parameters():
                 p.requires_grad = False
             if train_cfm:
@@ -666,6 +707,10 @@ class Trainer:
             # 如果不存在本地检查点，则根据参数决定是否加载预训练检查点
             if self.train_cfm:
                 cfm_checkpoint_path = pretrained_cfm_ckpt_path
+                # 单独训练 CFM 时也要加载 AR（冻结 AR，用 AR 生成 wide tokens）
+                if not self.train_ar and pretrained_ar_ckpt_path:
+                    ar_checkpoint_path = pretrained_ar_ckpt_path
+                    print("单独训练 CFM：加载 AR checkpoint（冻结）")
             if self.train_ar:
                 ar_checkpoint_path = pretrained_ar_ckpt_path
             
@@ -736,9 +781,11 @@ class Trainer:
             
             
             # 加载模型检查点，只传递需要的检查点路径，并传递train_cfm和train_ar参数
+            # 单独训练 CFM 时，也传递 AR checkpoint（用于生成 wide tokens，但冻结 AR）
+            cfm_only_mode = self.train_cfm and not self.train_ar
             state = self.model.load_checkpoints(
                 cfm_checkpoint_path=cfm_checkpoint_path if self.train_cfm else None, 
-                ar_checkpoint_path=ar_checkpoint_path if self.train_ar else None,
+                ar_checkpoint_path=ar_checkpoint_path if (self.train_ar or cfm_only_mode) else None,
                 train_cfm=self.train_cfm,
                 train_ar=self.train_ar,
                 load_training_state=should_restore_from_checkpoint,  # 根据检查点类型决定是否加载完整训练状态
@@ -1290,6 +1337,11 @@ class Trainer:
 
     def _process_batch(self, epoch, i, batch):
         """Process a single batch"""
+        # 检查是否是配对模式的 batch（dict 类型）
+        if isinstance(batch, dict):
+            return self._process_paired_batch(epoch, i, batch)
+        
+        # 标准模式 - 自重建训练
         # Handle both old and new batch formats
         if len(batch) == 5:
             waves, mels, wave_lens, mel_lens, file_paths = batch
@@ -1325,6 +1377,12 @@ class Trainer:
                 wave_lengths_16k_device = wave_lengths_16k.to(self.device) if isinstance(wave_lengths_16k, torch.Tensor) else wave_lengths_16k
                 mel_lens_device = mel_lens.to(self.device) if isinstance(mel_lens, torch.Tensor) else mel_lens
                 
+                # 如果启用了 F0 条件，提取 F0（用于粤语等声调语言）
+                f0 = None
+                if self.f0_condition and self.rmvpe is not None:
+                    with torch.no_grad():
+                        f0 = self.rmvpe.infer_from_audio_batch(waves_16k_device)
+                
                 (loss_ar, logits_ar), (loss_cfm, logits_cfm) = self.model(
                     waves_16k_device,
                     mels_device,
@@ -1332,6 +1390,7 @@ class Trainer:
                     mel_lens_device,
                     forward_ar=self.train_ar,
                     forward_cfm=self.train_cfm,
+                    f0=f0,  # 传入 F0 条件
                 )
 
                 
@@ -1522,6 +1581,109 @@ class Trainer:
         self.optimizer.zero_grad()
 
         # Log training progress
+        self._log_training_progress(epoch, i, loss_total, scaled_loss_ar, scaled_loss_cfm, loss_cfm, grad_norm_g, scaled_distill_cfm_loss, scaled_distill_ar_loss, distill_cfm_loss, distill_ar_loss)
+
+    def _process_paired_batch(self, epoch, i, batch):
+        """
+        处理配对训练的 batch
+        
+        配对训练的核心设计：
+        - AR 模型: 配对训练 (source_narrow → target_wide)
+        - CFM 模型: 自重建训练 (target_wide + ref_style → target_mel)
+        """
+        # 从 dict 中提取数据
+        source_waves = batch['source_waves']
+        source_wave_lens = batch['source_wave_lens']
+        target_waves = batch['target_waves']
+        target_wave_lens = batch['target_wave_lens']
+        ref_waves = batch['ref_waves']
+        ref_wave_lens = batch['ref_wave_lens']
+        target_mels = batch['target_mels']
+        target_mel_lens = batch['target_mel_lens']
+        
+        # Resample to 16kHz
+        source_waves_16k = torchaudio.functional.resample(source_waves, self.sr, 16000)
+        source_wave_lens_16k = (source_wave_lens.float() * 16000 / self.sr).long()
+        target_waves_16k = torchaudio.functional.resample(target_waves, self.sr, 16000)
+        target_wave_lens_16k = (target_wave_lens.float() * 16000 / self.sr).long()
+        ref_waves_16k = torchaudio.functional.resample(ref_waves, self.sr, 16000)
+        ref_wave_lens_16k = (ref_wave_lens.float() * 16000 / self.sr).long()
+        
+        try:
+            if self.requested_fp16:
+                autocast_context = self.accelerator.autocast()
+            else:
+                autocast_context = nullcontext()
+            
+            with autocast_context:
+                # 移动到设备
+                source_waves_16k = source_waves_16k.to(self.device)
+                source_wave_lens_16k = source_wave_lens_16k.to(self.device)
+                target_waves_16k = target_waves_16k.to(self.device)
+                target_wave_lens_16k = target_wave_lens_16k.to(self.device)
+                ref_waves_16k = ref_waves_16k.to(self.device)
+                ref_wave_lens_16k = ref_wave_lens_16k.to(self.device)
+                target_mels = target_mels.to(self.device)
+                target_mel_lens = target_mel_lens.to(self.device)
+                
+                # 提取 F0（如果启用）
+                target_f0 = None
+                if self.f0_condition and self.rmvpe is not None:
+                    with torch.no_grad():
+                        target_f0 = self.rmvpe.infer_from_audio_batch(target_waves_16k)
+                
+                # 使用 forward_paired
+                (loss_ar, logits_ar), (loss_cfm, logits_cfm) = self.model.forward_paired(
+                    source_waves_16k, source_wave_lens_16k,
+                    target_waves_16k, target_wave_lens_16k,
+                    ref_waves_16k, ref_wave_lens_16k,
+                    target_mels, target_mel_lens,
+                    forward_ar=self.train_ar,
+                    forward_cfm=self.train_cfm,
+                    target_f0=target_f0,
+                )
+                
+                # 计算损失（配对训练不使用蒸馏）
+                distill_cfm_loss = 0
+                distill_ar_loss = 0
+                
+                self.loss_scaling_factors, loss_total, scaled_loss_cfm, scaled_distill_cfm_loss, scaled_loss_ar, scaled_distill_ar_loss = \
+                    self._compute_loss_and_dynamic_loss_scaling_factors(loss_cfm, distill_cfm_loss, loss_ar, distill_ar_loss)
+                
+                # EMA loss
+                if not hasattr(self, 'ema_loss'):
+                    self.ema_loss = 0
+                if not hasattr(self, 'loss_smoothing_rate'):
+                    self.loss_smoothing_rate = 0.99
+                self.ema_loss = (
+                    self.loss_smoothing_rate * self.ema_loss + (1 - self.loss_smoothing_rate) * loss_total
+                    if self.ema_loss != 0 else loss_total
+                )
+                
+        except RuntimeError as e:
+            if 'out of memory' in str(e).lower() or 'nan' in str(e).lower() or 'inf' in str(e).lower():
+                print(f"Paired batch error: {e}, skipping batch")
+                torch.cuda.empty_cache()
+                return
+            raise e
+        
+        # 反向传播
+        self.accelerator.backward(loss_total)
+        
+        # 梯度裁剪和优化
+        grad_norm_g = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
+        self.optimizer.step()
+        
+        # 学习率调度
+        self.iters += 1
+        if self.iters < self.warmup_steps:
+            self.warmup_scheduler.step()
+        else:
+            self.cosine_scheduler.step()
+        
+        self.optimizer.zero_grad()
+        
+        # 日志
         self._log_training_progress(epoch, i, loss_total, scaled_loss_ar, scaled_loss_cfm, loss_cfm, grad_norm_g, scaled_distill_cfm_loss, scaled_distill_ar_loss, distill_cfm_loss, distill_ar_loss)
 
 
@@ -1776,6 +1938,8 @@ def main(args):
         grad_clip_norm=args.grad_clip_norm,
         distill_temperature=args.distill_temperature,
         cfm_scale=args.cfm_scale,
+        # 配对训练参数
+        source_dir=args.source_dir,
     )
     # 添加fp16错误处理
     try:
@@ -1834,6 +1998,12 @@ if __name__ == '__main__':
     
     # 语言参数
     parser.add_argument('--language', type=str, default=None, help='Language for Whisper model')
+    
+    # 配对训练参数
+    parser.add_argument('--source-dir', type=str, default=None, 
+                       help='源说话人音频目录（平行语料），文件名需与 target 对应')
+    parser.add_argument('--random-reference', action='store_true',
+                       help='参考音频从 target 集合中随机选择（而非 target 本身）')
     
     args = parser.parse_args()
     main(args)

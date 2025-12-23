@@ -51,11 +51,13 @@ class VoiceConversionWrapper(torch.nn.Module):
         self.dit_max_context_len = 30  # in seconds
         self.ar_max_content_len = 1500  # in num of narrow tokens
         self.compile_len = 87 * self.dit_max_context_len
+        self.use_ar_for_cfm_training = False  # 是否使用 AR 生成 wide tokens（单独训练 CFM 时为 True）
 
-    def forward_cfm(self, content_indices_wide, content_lens, mels, mel_lens, style_vectors):
+    def forward_cfm(self, content_indices_wide, content_lens, mels, mel_lens, style_vectors, f0=None):
         device = content_indices_wide.device
         B = content_indices_wide.size(0)
-        cond, _ = self.cfm_length_regulator(content_indices_wide, ylens=mel_lens)
+        # 支持 F0 条件 - 如果配置中启用了 f0_condition 且传入了 f0，则使用
+        cond, _ = self.cfm_length_regulator(content_indices_wide, ylens=mel_lens, f0=f0)
 
         # randomly set a length as prompt
         prompt_len_max = mel_lens - 1
@@ -65,7 +67,7 @@ class VoiceConversionWrapper(torch.nn.Module):
         loss, logits = self.cfm(mels, mel_lens, prompt_len, cond, style_vectors)
         return loss, logits
 
-    def forward_ar(self, content_indices_narrow, content_indices_wide, content_lens):
+    def forward_ar(self, content_indices_narrow, content_indices_wide, content_lens, f0=None):
         device = content_indices_narrow.device
         duration_reduced_narrow_tokens = []
         duration_reduced_narrow_lens = []
@@ -77,14 +79,23 @@ class VoiceConversionWrapper(torch.nn.Module):
             batch_first=True, padding_value=0).to(device)
         duration_reduced_narrow_lens = torch.LongTensor(duration_reduced_narrow_lens).to(device)
 
-        # interpolate speech token to match acoustic feature length
-        cond, _ = self.ar_length_regulator(duration_reduced_narrow_tokens)
+        # 支持 F0 条件 - 如果配置中启用了 f0_condition 且传入了 f0，则使用
+        cond, _ = self.ar_length_regulator(duration_reduced_narrow_tokens, f0=f0)
         loss, logits = self.ar(cond, duration_reduced_narrow_lens, content_indices_wide, content_lens)
         return loss, logits
 
-    def forward(self, waves_16k, mels, wave_lens_16k, mel_lens, forward_ar=False, forward_cfm=True):
+    def forward(self, waves_16k, mels, wave_lens_16k, mel_lens, forward_ar=False, forward_cfm=True, f0=None):
         """
         Forward pass for the model.
+        
+        Args:
+            waves_16k: 16kHz waveforms
+            mels: Mel spectrograms
+            wave_lens_16k: Waveform lengths at 16kHz
+            mel_lens: Mel spectrogram lengths
+            forward_ar: Whether to compute AR loss
+            forward_cfm: Whether to compute CFM loss
+            f0: Optional F0 (pitch) contour for tone conditioning (important for tonal languages like Cantonese)
         """
         # extract wide content features as both AR and CFM models use them
         with torch.no_grad():
@@ -94,15 +105,113 @@ class VoiceConversionWrapper(torch.nn.Module):
         if forward_ar:
             # extract narrow content features for AR model
             _, content_indices_narrow, _ = self.content_extractor_narrow(waves_16k, wave_lens_16k, ssl_model=self.content_extractor_wide.ssl_model)
-            loss_ar, logits_ar = self.forward_ar(content_indices_narrow.clone(), content_indices_wide.clone(), content_lens)
+            loss_ar, logits_ar = self.forward_ar(content_indices_narrow.clone(), content_indices_wide.clone(), content_lens, f0=f0)
         else:
             loss_ar = torch.tensor(0.0, device=waves_16k.device, dtype=waves_16k.dtype)
         if forward_cfm:
+            # 单独训练 CFM 时，使用 AR 预测的 wide tokens（而不是直接用 content_extractor_wide）
+            if self.use_ar_for_cfm_training and not forward_ar:
+                # 提取 narrow tokens 并使用 AR 预测 wide tokens
+                with torch.no_grad():
+                    _, content_indices_narrow, _ = self.content_extractor_narrow(
+                        waves_16k, wave_lens_16k, ssl_model=self.content_extractor_wide.ssl_model
+                    )
+                    # 使用 AR 的 teacher forcing 输出（argmax logits）作为预测的 wide tokens
+                    _, ar_logits = self.forward_ar(
+                        content_indices_narrow.clone(), 
+                        content_indices_wide.clone(),  # 仍需要 ground truth 做 teacher forcing
+                        content_lens, 
+                        f0=f0
+                    )
+                    # argmax 得到预测的 wide tokens
+                    content_indices_wide_for_cfm = ar_logits.argmax(dim=-1)
+            else:
+                content_indices_wide_for_cfm = content_indices_wide
+            
             style_vectors = self.compute_style(waves_16k, wave_lens_16k)
-            loss_cfm, logits_cfm = self.forward_cfm(content_indices_wide, content_lens, mels, mel_lens, style_vectors)
+            loss_cfm, logits_cfm = self.forward_cfm(content_indices_wide_for_cfm, content_lens, mels, mel_lens, style_vectors, f0=f0)
         else:
             loss_cfm = torch.tensor(0.0, device=waves_16k.device, dtype=waves_16k.dtype)
         # 返回损失值和logits，用于知识蒸馏
+        return (loss_ar, logits_ar), (loss_cfm, logits_cfm)
+
+    def forward_paired(self, source_waves_16k, source_wave_lens_16k, 
+                       target_waves_16k, target_wave_lens_16k,
+                       ref_waves_16k, ref_wave_lens_16k,
+                       target_mels, target_mel_lens,
+                       forward_ar=False, forward_cfm=True, 
+                       source_f0=None, target_f0=None):
+        """
+        配对训练的 forward pass。
+        
+        核心设计：
+        - AR 模型: 自重建训练 (target_narrow → target_wide)
+        - CFM 模型: 自重建训练 (target_wide + ref_style → target_mel)
+        
+        这样设计的原因：
+        1. AR 的作用是语义压缩/去噪，不涉及音色转换，自重建更稳定
+        2. CFM 需要帧级对齐，使用 target 的内容保证对齐
+        3. 配对训练的主要价值是让模型更熟悉 target 说话人的特征
+        
+        Args:
+            source_waves_16k: 源音频 (16kHz) - 配对信息（未使用，留作扩展）
+            source_wave_lens_16k: 源音频长度
+            target_waves_16k: 目标音频 (16kHz) - 提供内容和目标 mel
+            target_wave_lens_16k: 目标音频长度
+            ref_waves_16k: 参考音频 (16kHz) - 提供风格
+            ref_wave_lens_16k: 参考音频长度
+            target_mels: 目标 mel spectrogram
+            target_mel_lens: 目标 mel 长度
+            forward_ar: 是否计算 AR 损失
+            forward_cfm: 是否计算 CFM 损失
+            source_f0: 源音频的 F0（可选）
+            target_f0: 目标音频的 F0（可选，用于 F0 条件）
+        """
+        logits_ar = None
+        logits_cfm = None
+        
+        if forward_ar:
+            # AR 模型: 自重建训练（用 target 音频）
+            # target_narrow → 预测 target_wide
+            with torch.no_grad():
+                _, target_content_narrow, _ = self.content_extractor_narrow(
+                    target_waves_16k, target_wave_lens_16k
+                )
+                _, target_content_wide, target_content_lens = self.content_extractor_wide(
+                    target_waves_16k, target_wave_lens_16k
+                )
+            
+            loss_ar, logits_ar = self.forward_ar(
+                target_content_narrow.clone(), 
+                target_content_wide.clone(),  # AR 目标: target 的 wide tokens
+                target_content_lens, 
+                f0=target_f0
+            )
+        else:
+            loss_ar = torch.tensor(0.0, device=target_waves_16k.device, dtype=target_waves_16k.dtype)
+        
+        if forward_cfm:
+            # CFM 模型: 自重建训练（保证帧对齐）
+            # target_wide + ref_style → target_mel
+            with torch.no_grad():
+                _, target_content_wide, target_content_lens = self.content_extractor_wide(
+                    target_waves_16k, target_wave_lens_16k
+                )
+            
+            # 从参考音频提取风格（可以是 target 本身或 target 集合中的其他音频）
+            ref_style = self.compute_style(ref_waves_16k, ref_wave_lens_16k)
+            
+            loss_cfm, logits_cfm = self.forward_cfm(
+                target_content_wide,  # target 内容（保证帧对齐）
+                target_content_lens,
+                target_mels,          # target mel
+                target_mel_lens,
+                ref_style,            # 参考风格
+                f0=target_f0          # target 的 F0
+            )
+        else:
+            loss_cfm = torch.tensor(0.0, device=target_waves_16k.device, dtype=target_waves_16k.dtype)
+        
         return (loss_ar, logits_ar), (loss_cfm, logits_cfm)
 
     def compile_ar(self):
@@ -306,8 +415,12 @@ class VoiceConversionWrapper(torch.nn.Module):
             missing_keys, unexpected_keys = self.cfm_length_regulator.load_state_dict(cfm_length_regulator_state_dict, strict=False)
 
         # ar
-        if ar_checkpoint_path is not None and train_ar:
+        # 单独训练 CFM 时也需要加载 AR（冻结，用于生成 wide tokens）
+        cfm_only_mode = train_cfm and not train_ar
+        if ar_checkpoint_path is not None and (train_ar or cfm_only_mode):
             print(f"Loading AR checkpoint from {ar_checkpoint_path}...")
+            if cfm_only_mode:
+                print("单独训练 CFM 模式：AR 将被冻结，用于生成 wide tokens")
             ar_checkpoint = torch.load(ar_checkpoint_path, map_location="cpu")
             
             # 如果需要加载完整训练状态
@@ -321,6 +434,20 @@ class VoiceConversionWrapper(torch.nn.Module):
             ar_state_dict = self.strip_prefix(ar_checkpoint["net"]['ar'], "module.")
             missing_keys, unexpected_keys = self.ar.load_state_dict(ar_state_dict, strict=False)
             missing_keys, unexpected_keys = self.ar_length_regulator.load_state_dict(ar_length_regulator_state_dict, strict=False)
+            
+            # 单独训练 CFM 时冻结 AR 参数
+            if cfm_only_mode:
+                print("冻结 AR 模型参数...")
+                for param in self.ar.parameters():
+                    param.requires_grad = False
+                for param in self.ar_length_regulator.parameters():
+                    param.requires_grad = False
+                self.ar.eval()  # 设置为 eval 模式
+                self.ar_length_regulator.eval()
+                self.use_ar_for_cfm_training = True  # 标记使用 AR 生成 wide tokens
+                print("已冻结 AR 模型，训练 CFM 时将使用 AR 生成 wide tokens")
+            else:
+                self.use_ar_for_cfm_training = False
             
             # 如果需要加载训练状态，同时加载优化器和调度器状态
             if load_training_state and optimizer is not None and 'optimizer' in ar_checkpoint:
