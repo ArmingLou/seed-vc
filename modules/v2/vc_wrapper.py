@@ -446,7 +446,14 @@ class VoiceConversionWrapper(torch.nn.Module):
             cfm_length_regulator_state_dict = self.strip_prefix(cfm_checkpoint["net"]['length_regulator'], "module.")
             cfm_state_dict = self.strip_prefix(cfm_checkpoint["net"]['cfm'], "module.")
             missing_keys, unexpected_keys = self.cfm.load_state_dict(cfm_state_dict, strict=False)
-            missing_keys, unexpected_keys = self.cfm_length_regulator.load_state_dict(cfm_length_regulator_state_dict, strict=False)
+            missing_keys_lr, unexpected_keys_lr = self.cfm_length_regulator.load_state_dict(cfm_length_regulator_state_dict, strict=False)
+            # 调试: 打印 F0 相关的 missing/unexpected keys
+            f0_missing = [k for k in missing_keys_lr if 'f0' in k]
+            f0_unexpected = [k for k in unexpected_keys_lr if 'f0' in k]
+            if f0_missing:
+                print(f"[F0 Warning] Missing F0 keys in cfm_length_regulator: {f0_missing}")
+            if f0_unexpected:
+                print(f"[F0 Warning] Unexpected F0 keys in cfm_length_regulator: {f0_unexpected}")
             
             # 如果需要加载训练状态，同时加载优化器和调度器状态
             if load_training_state and optimizer is not None and 'optimizer' in cfm_checkpoint:
@@ -857,6 +864,12 @@ class VoiceConversionWrapper(torch.nn.Module):
         
         # 提取 F0（如果启用）
         source_f0 = self.extract_f0(source_wave_16k, device) if self.f0_condition else None
+        if self.f0_condition:
+            print(f"[F0 Debug] f0_condition={self.f0_condition}, rmvpe={self.rmvpe is not None}")
+            if source_f0 is not None:
+                print(f"[F0 Debug] source_f0 shape={source_f0.shape}, min={source_f0.min():.2f}, max={source_f0.max():.2f}")
+            else:
+                print(f"[F0 Debug] source_f0 is None!")
         
         # 应用粤语声调修正（如果指定了 yue_fix 文件）
         if yue_fix is not None and source_f0 is not None:
