@@ -52,7 +52,7 @@ def check_dependencies():
     return whisper_type
 
 
-def load_whisper_model(model_size: str = "base", whisper_type: str = "faster_whisper"):
+def load_whisper_model(model_size: str = "small", whisper_type: str = "faster_whisper"):
     """加载Whisper模型"""
     
     if whisper_type == "faster_whisper":
@@ -432,12 +432,12 @@ def interactive_mode():
     model_choices = ["tiny", "base", "small", "medium", "large"]
     model_size = simpledialog.askstring(
         "Whisper模型",
-        "选择Whisper模型大小 (tiny/base/small/medium/large)\n默认: base",
-        initialvalue="base",
+        "选择Whisper模型大小 (tiny/base/small/medium/large)\n默认: small",
+        initialvalue="small",
         parent=root
     )
     if not model_size or model_size not in model_choices:
-        model_size = "base"
+        model_size = "small"
     
     # 5. 是否直接带时间戳
     with_times = messagebox.askyesno(
@@ -497,7 +497,7 @@ def interactive_mode():
 
 
 def run_extraction(audio: str, output: str, text: str = None, 
-                   model: str = "base", mode: str = "whisper",
+                   model: str = "small", mode: str = "whisper",
                    with_times: bool = False, language: str = "yue"):
     """执行时间提取"""
     # 检查依赖并确定 whisper 类型
@@ -583,9 +583,9 @@ def main():
                         help="指定文字内容（不指定则自动识别）")
     parser.add_argument("--output", "-o", type=str, default=None,
                         help="输出文件路径")
-    parser.add_argument("--model", "-m", type=str, default="base",
+    parser.add_argument("--model", "-m", type=str, default="small",
                         choices=["tiny", "base", "small", "medium", "large"],
-                        help="Whisper模型大小 (默认: base)")
+                        help="Whisper模型大小 (默认: small)")
     parser.add_argument("--mode", type=str, default="whisper",
                         choices=["whisper", "vad"],
                         help="时间提取模式 (默认: whisper)")

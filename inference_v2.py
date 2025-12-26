@@ -188,7 +188,7 @@ def main(args):
     target_name = os.path.basename(args.target).split(".")[0]
 
     # Create a descriptive filename
-    filename = f"vc_v2_{source_name}_{target_name}_{args.length_adjust}_{args.diffusion_steps}_{args.similarity_cfg_rate}.wav"
+    filename = f"{source_name}_{target_name}_{args.length_adjust}_{args.diffusion_steps}_{args.similarity_cfg_rate}_vc_v2.wav"
 
     output_path = os.path.join(args.output, filename)
     save_sr, converted_audio = converted_audio
