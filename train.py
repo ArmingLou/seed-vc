@@ -1611,9 +1611,10 @@ class Trainer:
 
         # find all checkpoints and remove old ones
         checkpoints = glob.glob(os.path.join(self.log_dir, 'DiT_epoch_*.pth'))
-        if len(checkpoints) > 4:
+        max_keep = 4
+        if len(checkpoints) > max_keep:
             checkpoints.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
-            for cp in checkpoints[:-2]:
+            for cp in checkpoints[:-max_keep]:
                 os.remove(cp)
 
     def train_one_epoch(self):
