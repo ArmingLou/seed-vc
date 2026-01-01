@@ -368,16 +368,16 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     echo "强制使用 CPU: $USE_CPU"
     echo "共享应用: $SHARE"
     echo "语言参数: $LANGUAGE"
-
+    if [[ -n "$CONF_DIR" ]]; then
+        echo "配置目录: $CONF_DIR"
+    fi
+    
     if [[ "$APP_TYPE" = "vc" ]] || [[ "$APP_TYPE" = "svc" ]]; then
         if [[ -n "$CHECKPOINT" ]]; then
             echo "模型检查点: $CHECKPOINT"
         fi
         if [[ -n "$CONFIG" ]]; then
             echo "配置文件: $CONFIG"
-        fi
-        if [[ -n "$CONF_DIR" ]]; then
-            echo "配置目录: $CONF_DIR"
         fi
         echo "FP16: $FP16"
     elif [[ "$APP_TYPE" = "v2" ]]; then

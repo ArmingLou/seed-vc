@@ -12,11 +12,20 @@ from hf_utils import load_custom_model_from_hf
 import numpy as np
 from pydub import AudioSegment
 import argparse
+import glob
 # Load model and configuration
 
 fp16 = False
 device = None
-def load_models(args):
+
+# Get list of config files and checkpoint files
+config_files = []
+checkpoint_files = []
+config_file_names = []
+checkpoint_file_names = []
+config_file_dict = {}
+checkpoint_file_dict = {}
+def load_models(args, config_path=None, checkpoint_path=None):
     global sr, hop_length, fp16, whisper_model
     fp16 = args.fp16
     print(f"Using device: {device}")
@@ -25,15 +34,35 @@ def load_models(args):
     # 仅在需要时打印警告信息
     if (device.type == "cpu" or device.type == "mps") and fp16:
         print(f"Warning: fp16 is enabled for {device.type} device, which may cause issues")
-    # f0 conditioned model
-    if args.checkpoint is None or args.checkpoint == "":
-        dit_checkpoint_path, dit_config_path = load_custom_model_from_hf("Plachta/Seed-VC",
-                                                                         "DiT_seed_v2_uvit_whisper_base_f0_44k_bigvgan_pruned_ft_ema_v2.pth",
-                                                                         "config_dit_mel_seed_uvit_whisper_base_f0_44k.yml")
-    else:
-        print(f"Using custom checkpoint: {args.checkpoint}")
-        dit_checkpoint_path = args.checkpoint
+    
+    # Handle config file - if not provided or set to "None", load from HF
+    if config_path is not None and config_path != "None":
+        # Use the selected config file
+        dit_config_path = config_path
+    elif args.config is not None and args.config != "":
+        # Use the config file from command line
         dit_config_path = args.config
+    else:
+        # Load default config from HF
+        _, dit_config_path = load_custom_model_from_hf("Plachta/Seed-VC",
+                                                         "DiT_seed_v2_uvit_whisper_base_f0_44k_bigvgan_pruned_ft_ema_v2.pth",
+                                                         "config_dit_mel_seed_uvit_whisper_base_f0_44k.yml")
+    
+    # Handle checkpoint file - independent of config file
+    if checkpoint_path is not None and checkpoint_path != "None":
+        # Use the selected checkpoint file
+        dit_checkpoint_path = checkpoint_path
+    elif args.checkpoint is not None and args.checkpoint != "":
+        # Use the checkpoint file from command line
+        dit_checkpoint_path = args.checkpoint
+    else:
+        # Load default checkpoint from HF
+        dit_checkpoint_path = load_custom_model_from_hf("Plachta/Seed-VC",
+                                                         "DiT_seed_v2_uvit_whisper_base_f0_44k_bigvgan_pruned_ft_ema_v2.pth",
+                                                         None)
+    
+    print(f"Loading config from {dit_config_path}")
+    print(f"Loading checkpoint from {dit_checkpoint_path}")
     config = yaml.safe_load(open(dit_config_path, "r"))
     model_params = recursive_munch(config["model_params"])
     model_params.dit_type = 'DiT'
@@ -151,9 +180,19 @@ def load_models(args):
             print(f"信息: 已成功回退到float32精度并重新加载模型")
             
         def semantic_fn(waves_16k):
+            global current_language
+            # 准备输入特征，如果指定了语言则添加语言参数
+            feature_extractor_args = {
+                "return_tensors": "pt",
+                "return_attention_mask": True,
+                "sampling_rate": 16000,
+            }
+            if current_language is not None:
+                print(f"正在使用语言参数: {current_language}")
+                feature_extractor_args["language"] = current_language
+            
             ori_inputs = whisper_feature_extractor([waves_16k.squeeze(0).cpu().numpy()],
-                                                   return_tensors="pt",
-                                                   return_attention_mask=True)
+                                                   **feature_extractor_args)
             ori_input_features = whisper_model._mask_input_features(
                 ori_inputs.input_features, attention_mask=ori_inputs.attention_mask).to(device)
             with torch.no_grad():
@@ -324,6 +363,7 @@ def crossfade(chunk1, chunk2, overlap):
 # overlap_wave_len = overlap_frame_len * hop_length
 bitrate = "320k"
 
+current_language = None
 model_f0, semantic_fn, vocoder_fn, campplus_model, to_mel_f0, mel_fn_args = None, None, None, None, None, None
 f0_fn = None
 overlap_wave_len = None
@@ -334,7 +374,9 @@ overlap_frame_len = 16
 
 @torch.no_grad()
 @torch.inference_mode()
-def voice_conversion(source, target, diffusion_steps, length_adjust, inference_cfg_rate, auto_f0_adjust, pitch_shift):
+def voice_conversion(source, target, diffusion_steps, length_adjust, inference_cfg_rate, auto_f0_adjust, pitch_shift, language=None):
+    global current_language
+    current_language = language
     inference_module = model_f0
     mel_fn = to_mel_f0
     # Load audio
@@ -514,6 +556,33 @@ def voice_conversion(source, target, diffusion_steps, length_adjust, inference_c
 def main(args):
     global model_f0, semantic_fn, vocoder_fn, campplus_model, to_mel_f0, mel_fn_args, f0_fn
     global overlap_wave_len, max_context_window, sr, hop_length
+    global config_file_names, config_file_dict, checkpoint_file_names, checkpoint_file_dict
+    
+    # Get list of config files and checkpoint files from conf_dir
+    if args.conf_dir and os.path.exists(args.conf_dir):
+        config_files = glob.glob(os.path.join(args.conf_dir, "*.yml")) + glob.glob(os.path.join(args.conf_dir, "*.yaml"))
+        config_file_names = [os.path.basename(f) for f in config_files]
+        config_file_dict = {name: path for name, path in zip(config_file_names, config_files)}
+        
+        checkpoint_files = glob.glob(os.path.join(args.conf_dir, "*.pth"))
+        checkpoint_file_names = [os.path.basename(f) for f in checkpoint_files]
+        checkpoint_file_dict = {name: path for name, path in zip(checkpoint_file_names, checkpoint_files)}
+    else:
+        # Default to presets directory
+        config_dir = "configs/presets"
+        config_files = glob.glob(os.path.join(config_dir, "*.yml")) + glob.glob(os.path.join(config_dir, "*.yaml"))
+        config_file_names = [os.path.basename(f) for f in config_files]
+        config_file_dict = {name: path for name, path in zip(config_file_names, config_files)}
+        
+        # No checkpoint files by default
+        checkpoint_file_names = []
+        checkpoint_file_dict = {}
+    
+    # Add "None" option to both lists
+    config_file_names = ["None"] + config_file_names if config_file_names else ["None"]
+    checkpoint_file_names = ["None"] + checkpoint_file_names if checkpoint_file_names else ["None"]
+    
+    # Load initial models with default config
     model_f0, semantic_fn, vocoder_fn, campplus_model, to_mel_f0, mel_fn_args, f0_fn = load_models(args)
     # streaming and chunk processing related params
     max_context_window = sr // hop_length * 30
@@ -523,44 +592,103 @@ def main(args):
                    "If total duration of source and reference audio exceeds 30s, source audio will be processed in chunks.<br> "
                    "无需训练的 zero-shot 语音/歌声转换模型，若需本地部署查看[GitHub页面](https://github.com/Plachtaa/seed-vc)<br>"
                    "请注意，参考音频若超过 25 秒，则会被自动裁剪至此长度。<br>若源音频和参考音频的总时长超过 30 秒，源音频将被分段处理。")
-    inputs = [
-        gr.Audio(type="filepath", label="Source Audio / 源音频"),
-        gr.Audio(type="filepath", label="Reference Audio / 参考音频"),
-        gr.Slider(minimum=1, maximum=200, value=10, step=1, label="Diffusion Steps / 扩散步数", info="10 by default, 50~100 for best quality / 默认为 10，50~100 为最佳质量"),
-        gr.Slider(minimum=0.5, maximum=2.0, step=0.1, value=1.0, label="Length Adjust / 长度调整", info="<1.0 for speed-up speech, >1.0 for slow-down speech / <1.0 加速语速，>1.0 减慢语速"),
-        gr.Slider(minimum=0.0, maximum=1.0, step=0.1, value=0.7, label="Inference CFG Rate", info="has subtle influence / 有微小影响"),
-        gr.Checkbox(label="Auto F0 adjust / 自动F0调整", value=True,
-                    info="Roughly adjust F0 to match target voice. Only works when F0 conditioned model is used. / 粗略调整 F0 以匹配目标音色，仅在勾选 '启用F0输入' 时生效"),
-        gr.Slider(label='Pitch shift / 音调变换', minimum=-24, maximum=24, step=1, value=0, info="Pitch shift in semitones, only works when F0 conditioned model is used / 半音数的音高变换，仅在勾选 '启用F0输入' 时生效"),
-    ]
-
-    examples = [["examples/source/yae_0.wav", "examples/reference/dingzhen_0.wav", 25, 1.0, 0.7, True, 0],
-                ["examples/source/jay_0.wav", "examples/reference/azuma_0.wav", 25, 1.0, 0.7, True, 0],
-                ["examples/source/Wiz Khalifa,Charlie Puth - See You Again [vocals]_[cut_28sec].wav",
-                 "examples/reference/teio_0.wav", 50, 1.0, 0.7, False, 0],
-                ["examples/source/TECHNOPOLIS - 2085 [vocals]_[cut_14sec].wav",
-                 "examples/reference/trump_0.wav", 50, 1.0, 0.7, False, -12],
-                ]
-
-    outputs = [gr.Audio(label="Stream Output Audio / 流式输出", streaming=True, format='mp3'),
-               gr.Audio(label="Full Output Audio / 完整输出", streaming=False, format='wav')]
-
-    gr.Interface(fn=voice_conversion,
-                 description=description,
-                 inputs=inputs,
-                 outputs=outputs,
-                 title="Seed Voice Conversion",
-                 examples=examples,
-                 cache_examples=False,
-                 ).launch(share=args.share,)
+    
+    with gr.Blocks() as demo:
+        gr.Markdown("# Seed Voice Conversion")
+        gr.Markdown(description)
+        
+        with gr.Row():
+            config_choice = gr.Dropdown(choices=config_file_names, value="None", label="选择配置文件 / Select Config File")
+            checkpoint_choice = gr.Dropdown(choices=checkpoint_file_names, value="None", label="选择检查点文件 / Select Checkpoint File")
+            reload_btn = gr.Button("重新加载模型 / Reload Model")
+            
+        with gr.Row():
+            status_bar = gr.Text(show_label=False)
+        with gr.Row():
+            source_audio = gr.Audio(type="filepath", label="Source Audio / 源音频")
+            reference_audio = gr.Audio(type="filepath", label="Reference Audio / 参考音频")
+        with gr.Row():
+            convert_btn = gr.Button("开始转换 / Convert")
+        with gr.Row():
+            stream_output = gr.Audio(label="Stream Output Audio / 流式输出", streaming=True, format='mp3')
+            full_output = gr.Audio(label="Full Output Audio / 完整输出", streaming=False, format='wav')
+        with gr.Row():
+            with gr.Column():
+                language = gr.Dropdown(choices=[("Auto Detect", None), ("Chinese", "zh"), ("Cantonese", "yue"), ("English", "en"), ("Japanese", "ja"), ("Korean", "ko")], value=args.language, label="Language / 语言", info="Select language for Whisper model / 为Whisper模型选择语言")
+                diffusion_steps = gr.Slider(minimum=1, maximum=200, value=10, step=1, label="Diffusion Steps / 扩散步数", info="10 by default, 50~100 for best quality / 默认为 10，50~100 为最佳质量")
+                length_adjust = gr.Slider(minimum=0.5, maximum=2.0, step=0.1, value=1.0, label="Length Adjust / 长度调整", info="<1.0 for speed-up speech, >1.0 for slow-down speech / <1.0 加速语速，>1.0 减慢语速")
+                inference_cfg_rate = gr.Slider(minimum=0.0, maximum=1.0, step=0.1, value=0.7, label="Inference CFG Rate", info="has subtle influence / 有微小影响")
+                auto_f0_adjust = gr.Checkbox(label="Auto F0 adjust / 自动F0调整", value=True,
+                                    info="Roughly adjust F0 to match target voice. Only works when F0 conditioned model is used. / 粗略调整 F0 以匹配目标音色，仅在勾选 '启用F0输入' 时生效")
+                pitch_shift = gr.Slider(label='Pitch shift / 音调变换', minimum=-24, maximum=24, step=1, value=0, info="Pitch shift in semitones, only works when F0 conditioned model is used / 半音数的音高变换，仅在勾选 '启用F0输入' 时生效")
+        
+        examples = [
+            [None, "examples/reference/wise_9347.mp3", 100, 1.0, 1.0, True, 0, "yue"],
+            [None, "examples/reference/wise_9494.mp3", 100, 1.0, 1.0, True, 0, "yue"],
+            [None, "examples/reference/wise_9495.mp3", 100, 1.0, 1.0, True, 0, "yue"],
+            ["examples/source/yae_0.wav", "examples/reference/dingzhen_0.wav", 25, 1.0, 0.7, True, 0, None],
+            ["examples/source/jay_0.wav", "examples/reference/azuma_0.wav", 25, 1.0, 0.7, True, 0, None],
+            ["examples/source/Wiz Khalifa,Charlie Puth - See You Again [vocals]_[cut_28sec].wav",
+             "examples/reference/teio_0.wav", 50, 1.0, 0.7, False, 0, None],
+            ["examples/source/TECHNOPOLIS - 2085 [vocals]_[cut_14sec].wav",
+             "examples/reference/trump_0.wav", 50, 1.0, 0.7, False, -12, None],
+            ]
+        
+        gr.Examples(
+            examples=examples,
+            inputs=[source_audio, reference_audio, diffusion_steps, length_adjust, inference_cfg_rate, auto_f0_adjust, pitch_shift, language],
+        )
+        
+        def reload_model(config_name, checkpoint_name):
+            print(f"====Reloading model with config {config_name} and checkpoint {checkpoint_name}")
+            global model_f0, semantic_fn, vocoder_fn, campplus_model, to_mel_f0, mel_fn_args, f0_fn
+            config_path = config_file_dict.get(config_name) if config_name != "None" else None
+            checkpoint_path = checkpoint_file_dict.get(checkpoint_name) if checkpoint_name != "None" else None
+            
+            if config_path or checkpoint_path:
+                # Reload models with new config/checkpoint
+                model_f0, semantic_fn, vocoder_fn, campplus_model, to_mel_f0, mel_fn_args, f0_fn = load_models(args, config_path=config_path, checkpoint_path=checkpoint_path)
+                status_msg = f" 配置文件:   {config_name if config_name != 'None' else 'Default'}     |     检查点文件:   {checkpoint_name if checkpoint_name != 'None' else 'Default'}"
+                return status_msg, config_name, checkpoint_name
+            else:
+                # Reload with default settings
+                model_f0, semantic_fn, vocoder_fn, campplus_model, to_mel_f0, mel_fn_args, f0_fn = load_models(args)
+                return "模型已使用默认设置重新加载", config_name, checkpoint_name
+        
+        def convert_wrapper(source, target, diff_steps, len_adjust, cfg_rate, auto_f0, pitch, lang):
+            # 禁用转换按钮
+            yield None, None, gr.update(interactive=False)
+            final_result = (None, None)
+            try:
+                # Call voice_conversion with the right parameters
+                for result in voice_conversion(source, target, diff_steps, len_adjust, cfg_rate, auto_f0, pitch, lang):
+                    # 第一个元素是按钮状态，后续是音频结果
+                    final_result = result
+            except Exception as e:
+                # 发生异常时也要重新启用按钮
+                yield None, None, gr.update(interactive=True)
+                # 重新抛出异常以便在控制台看到错误信息
+                raise e
+            else:
+                # 正常结束时重新启用按钮
+                yield final_result[0], final_result[1], gr.update(interactive=True)
+        
+        reload_btn.click(fn=reload_model, inputs=[config_choice, checkpoint_choice], outputs=[status_bar, config_choice, checkpoint_choice])
+        convert_btn.click(fn=convert_wrapper, 
+                         inputs=[source_audio, reference_audio, diffusion_steps, length_adjust, inference_cfg_rate, auto_f0_adjust, pitch_shift, language],
+                         outputs=[stream_output, full_output, convert_btn])
+    
+    demo.launch(share=args.share)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=str, help="Path to the checkpoint file", default=None)
     parser.add_argument("--config", type=str, help="Path to the config file", default=None)
+    parser.add_argument("--conf-dir", type=str, help="Directory containing config and checkpoint files", default=None)
     parser.add_argument("--share", type=str2bool, nargs="?", const=True, default=False, help="Whether to share the app")
     parser.add_argument("--fp16", type=str2bool, nargs="?", const=True, help="Whether to use fp16", default=True)
     parser.add_argument("--gpu", type=int, help="Which GPU id to use", default=0)
+    parser.add_argument("--language", type=str, default=None, help="Language for Whisper model")
     args = parser.parse_args()
     cuda_target = f"cuda:{args.gpu}" if args.gpu else "cuda" 
 
