@@ -63,7 +63,7 @@ ar_length_regulator:
   sampling_ratios: [ ]
   # AR 模型也可以考虑启用 F0 条件，但这里先保持关闭
   # 因为 AR 主要关注语义到声学的映射，F0 信息可以在 CFM 阶段注入
-  f0_condition: false
+  f0_condition: true
 style_encoder:
   _target_: modules.campplus.DTDNN.CAMPPlus
   feat_dim: 80
