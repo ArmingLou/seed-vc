@@ -149,7 +149,7 @@ select_any_file() {
 # 默认参数设置
 VERSION="v1"              # 默认使用V1版本
 USE_CPU=true             # 默认使用CPU
-INPUT_DIR=""              # 输入目录
+INPUT_PATH=""             # 输入路径（可以是目录或单个文件）
 REFERENCE_FILE=""         # 参考音频文件
 OUTPUT_DIR=""             # 输出目录，默认为输入目录的父目录下的seedvc-output
 INTELLIGIBILITY_RATE=1.0  # V2版本的intelligibility-cfg-rate，默认1.0
@@ -175,10 +175,10 @@ DIFFUSION_STEPS=100       # 固定扩散步数为100
 
 # 显示帮助信息
 show_help() {
-    echo "用法: $0 [选项] --input-dir <目录> --reference <参考音频> --output-dir <输出目录>"
+    echo "用法: $0 [选项] --input-dir <目录或文件> --reference <参考音频> --output-dir <输出目录>"
     echo ""
     echo "通用选项:"
-    echo "  -i, --input-dir DIR          指定包含待处理音频文件的输入目录"
+    echo "  -i, --input-dir PATH         指定输入路径（可以是包含音频文件的目录或单个音频文件）"
     echo "  -r, --reference FILE         指定参考音频文件"
     echo "  -o, --output-dir DIR         指定输出目录 (默认: 输入目录的父目录下，格式为 输入目录名-converted-时间戳)"
     echo "      --v1                     使用V1版本 (默认)"
@@ -209,7 +209,7 @@ show_help() {
     echo ""
     echo "其他选项:"
     echo "  -h, --help                   显示此帮助信息"
-    echo "  -I, --interactive            交互式选择输入目录、参考文件和输出目录，以及其他可选参数"
+    echo "  -I, --interactive            交互式选择输入路径、参考文件和输出目录，以及其他可选参数"
     echo ""
     echo "离线模式:"
     echo "  如果您已经下载了所有模型文件，可以通过设置以下环境变量来启用离线模式:"
@@ -221,6 +221,7 @@ show_help() {
     echo "示例:"
     echo "  $0 -i ./sources -r ./ref.wav -o ./converted"
     echo "  $0 -i ./sources -r ./ref.wav --v2 --cpu"
+    echo "  $0 -i ./single_audio.wav -r ./ref.wav --v2 --cpu"
     echo "  HF_HUB_OFFLINE=1 $0 -i ./sources -r ./ref.wav"
     echo "  $0 -I"
     echo "  $0 -I --v2"
@@ -231,7 +232,7 @@ INTERACTIVE_MODE=false
 while [[ $# -gt 0 ]]; do
     case $1 in
         -i|--input-dir)
-            INPUT_DIR="$2"
+            INPUT_PATH="$2"
             shift 2
             ;;
         -r|--reference)
@@ -332,8 +333,8 @@ done
 
 # 检查必填参数（非交互模式下）
 if [[ "$INTERACTIVE_MODE" = false ]]; then
-    if [[ -z "$INPUT_DIR" ]]; then
-        echo "错误: 输入目录 (--input-dir|-i) 是必填参数"
+    if [[ -z "$INPUT_PATH" ]]; then
+        echo "错误: 输入路径 (--input-dir|-i) 是必填参数"
         show_help
         exit 1
     fi
@@ -376,22 +377,36 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
         echo "将使用CPU运行"
     fi
     
-    # 选择输入目录（必填）
-    while [[ -z "$SELECTED_INPUT_DIR" ]]; do
-        echo "请选择输入目录（包含待处理音频文件的目录） (必填):"
-        SELECTED_INPUT_DIR=$(select_directory "请选择输入目录" "$INPUT_DIR")
-        if [[ -n "$SELECTED_INPUT_DIR" ]]; then
-            INPUT_DIR="$SELECTED_INPUT_DIR"
-            echo "已选择输入目录: $INPUT_DIR"
+    # 选择输入路径（可以是目录或单个音频文件）
+    while [[ -z "$SELECTED_INPUT_PATH" ]]; do
+        echo "请选择输入路径（可以是包含音频文件的目录或单个音频文件） (必填):"
+        read -p "选择类型 - 1) 目录 2) 单个文件 (1/2): " -n 1 -r
+        echo
+        if [[ $REPLY == "2" ]]; then
+            # 选择单个文件
+            SELECTED_INPUT_PATH=$(select_file "请选择单个音频文件" "/Volumes/ssd/Documents/filmmiking" "wav,mp3")
+            if [[ -n "$SELECTED_INPUT_PATH" ]]; then
+                INPUT_PATH="$SELECTED_INPUT_PATH"
+                echo "已选择输入文件: $INPUT_PATH"
+            else
+                echo "输入文件为必填项，请重新选择。"
+            fi
         else
-            echo "输入目录为必填项，请重新选择。"
+            # 选择目录
+            SELECTED_INPUT_PATH=$(select_directory "请选择输入目录" "$INPUT_PATH")
+            if [[ -n "$SELECTED_INPUT_PATH" ]]; then
+                INPUT_PATH="$SELECTED_INPUT_PATH"
+                echo "已选择输入目录: $INPUT_PATH"
+            else
+                echo "输入目录为必填项，请重新选择。"
+            fi
         fi
     done
     
     # 选择参考音频文件（必填）
     while [[ -z "$SELECTED_REFERENCE_FILE" ]]; do
         echo "请选择参考音频文件 (必填):"
-        SELECTED_REFERENCE_FILE=$(select_file "请选择参考音频文件" "$REFERENCE_FILE" "wav,mp3")
+        SELECTED_REFERENCE_FILE=$(select_file "请选择参考音频文件" "/Volumes/ssd/Documents/ai/seedvc-train" "wav,mp3")
         if [[ -n "$SELECTED_REFERENCE_FILE" ]]; then
             REFERENCE_FILE="$SELECTED_REFERENCE_FILE"
             echo "已选择参考音频文件: $REFERENCE_FILE"
@@ -405,7 +420,7 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         echo "请选择输出目录:"
-        SELECTED_OUTPUT_DIR=$(select_directory "请选择输出目录" "$OUTPUT_DIR")
+        SELECTED_OUTPUT_DIR=$(select_directory "请选择输出目录" "/Users/arming/Downloads")
         if [[ -n "$SELECTED_OUTPUT_DIR" ]]; then
             OUTPUT_DIR="$SELECTED_OUTPUT_DIR"
             echo "已选择输出目录: $OUTPUT_DIR"
@@ -607,15 +622,27 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     echo ""
     echo "=== 参数确认 ==="
     echo "版本: $VERSION"
-    echo "输入目录: $INPUT_DIR"
+    if [[ -f "$INPUT_PATH" ]]; then
+        echo "输入文件: $INPUT_PATH"
+    else
+        echo "输入目录: $INPUT_PATH"
+    fi
     echo "参考音频: $REFERENCE_FILE"
 
     # 如果输出目录未指定，显示默认生成的路径
     if [[ -z "$OUTPUT_DIR" ]]; then
         # 生成默认输出目录路径
+        if [[ -f "$INPUT_PATH" ]]; then
+            # 如果输入是文件，使用文件所在目录作为基础
+            INPUT_DIR=$(dirname "$INPUT_PATH")
+        else
+            # 如果输入是目录，使用该目录
+            INPUT_DIR="$INPUT_PATH"
+        fi
+        INPUT_DIR_PARENT=$(dirname "$INPUT_DIR")
         INPUT_DIR_NAME=$(basename "$INPUT_DIR")
         TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-        DEFAULT_OUTPUT_DIR="${INPUT_DIR%/*}/seedvc-output/${INPUT_DIR_NAME}-converted-${TIMESTAMP}"
+        DEFAULT_OUTPUT_DIR="$INPUT_DIR_PARENT/${INPUT_DIR_NAME}-converted-${TIMESTAMP}"
         echo "输出目录: $DEFAULT_OUTPUT_DIR (默认)"
     else
         echo "输出目录: $OUTPUT_DIR"
@@ -671,7 +698,7 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     CMD="./batch_voice_conversion.sh"
     CMD+=" --${VERSION}"
 
-    CMD+=" --input-dir \"$INPUT_DIR\""
+    CMD+=" --input-dir \"$INPUT_PATH\""
     CMD+=" --reference \"$REFERENCE_FILE\""
 
     if [[ -n "$OUTPUT_DIR" ]]; then
@@ -694,7 +721,7 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
         if [[ "$SONG" = true ]]; then
             CMD+=" --song"
             if [[ "$SEMI_TONE_SHIFT" != "0" ]]; then
-                CMD+=" --semi-tone-shift $SEMI_TONE_SHIFT"
+                CMD+=" --pitch $SEMI_TONE_SHIFT"
             fi
         fi
         if [[ "$AUTO_F0_ADJUST" = "True" ]]; then
@@ -754,7 +781,7 @@ fi
 check_dependencies
 
 # 检查必需参数
-if [[ -z "$INPUT_DIR" ]] || [[ -z "$REFERENCE_FILE" ]]; then
+if [[ -z "$INPUT_PATH" ]] || [[ -z "$REFERENCE_FILE" ]]; then
     echo "错误: 必须指定 --input-dir 和 --reference 参数"
     if [[ "$INTERACTIVE_MODE" = false ]]; then
         show_help
@@ -762,10 +789,25 @@ if [[ -z "$INPUT_DIR" ]] || [[ -z "$REFERENCE_FILE" ]]; then
     exit 1
 fi
 
-# 检查输入目录是否存在
-if [[ ! -d "$INPUT_DIR" ]]; then
-    echo "错误: 输入目录 '$INPUT_DIR' 不存在"
+# 检查输入路径是否存在（可以是目录或文件）
+if [[ ! -d "$INPUT_PATH" ]] && [[ ! -f "$INPUT_PATH" ]]; then
+    echo "错误: 输入路径 '$INPUT_PATH' 不存在"
     exit 1
+fi
+
+# 检查输入路径是否为有效的音频文件（如果它是一个文件）
+if [[ -f "$INPUT_PATH" ]]; then
+    # 检查文件扩展名是否为支持的音频格式
+    if [[ ! "$INPUT_PATH" =~ \.(wav|mp3)$ ]]; then
+        echo "错误: 输入文件 '$INPUT_PATH' 不是支持的音频格式 (wav, mp3)"
+        exit 1
+    fi
+    
+    # 设置输入目录为文件所在目录，用于后续的输出目录生成
+    INPUT_DIR=$(dirname "$INPUT_PATH")
+else
+    # 如果输入是一个目录，则保留原来的逻辑
+    INPUT_DIR="$INPUT_PATH"
 fi
 
 # 检查参考音频文件是否存在
@@ -933,19 +975,27 @@ if [[ "$SONG" = true ]]; then
     F0_CONDITION="True"
 fi
 
-# 获取输入目录中的所有wav和mp3文件
-AUDIO_FILES=()
-while IFS= read -r -d '' file; do
-    AUDIO_FILES+=("$file")
-done < <(find "$INPUT_DIR" -type f \( -iname "*.wav" -o -iname "*.mp3" \) -print0)
-
-# 检查是否有找到音频文件
-if [[ ${#AUDIO_FILES[@]} -eq 0 ]]; then
-    echo "警告: 在目录 '$INPUT_DIR' 中未找到任何wav或mp3文件"
-    exit 0
+# 根据输入类型确定要处理的音频文件
+if [[ -f "$INPUT_PATH" ]]; then
+    # 如果输入是一个文件，则只处理这个文件
+    AUDIO_FILES=("$INPUT_PATH")
+    echo "处理单个音频文件: $(basename "$INPUT_PATH")"
+else
+    # 如果输入是一个目录，则获取目录中的所有wav和mp3文件
+    AUDIO_FILES=()
+    while IFS= read -r -d '' file; do
+        AUDIO_FILES+=("$file")
+    done < <(find "$INPUT_DIR" -type f \( -iname "*.wav" -o -iname "*.mp3" \) -print0)
+    
+    # 检查是否有找到音频文件
+    if [[ ${#AUDIO_FILES[@]} -eq 0 ]]; then
+        echo "警告: 在目录 '$INPUT_DIR' 中未找到任何wav或mp3文件"
+        exit 0
+    fi
+    
+    echo "找到 ${#AUDIO_FILES[@]} 个音频文件"
 fi
 
-echo "找到 ${#AUDIO_FILES[@]} 个音频文件"
 echo "参考音频: $REFERENCE_FILE"
 echo "输出目录: $OUTPUT_DIR"
 echo "模型版本: $VERSION"
