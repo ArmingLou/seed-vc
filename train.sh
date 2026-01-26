@@ -149,6 +149,10 @@ RANDOM_REFERENCE=false
 # F0 only 训练模式（V2版本特有）
 TRAIN_F0_ONLY=false
 
+# 内容提取和音色提取专用训练模式（V2版本特有）
+TRAIN_CONTENT_ONLY=false
+TRAIN_TIMBRE_ONLY=false
+
 # 日志文件路径
 LOG_FILE=""
 
@@ -350,6 +354,16 @@ while [[ $# -gt 0 ]]; do
             echo "启用 F0 only 训练模式"
             shift
             ;;
+        --train-content-only)
+            TRAIN_CONTENT_ONLY=true
+            echo "启用内容提取专用训练模式"
+            shift
+            ;;
+        --train-timbre-only)
+            TRAIN_TIMBRE_ONLY=true
+            echo "启用音色提取专用训练模式"
+            shift
+            ;;
 
         *)
             echo "未知参数: $1"
@@ -369,6 +383,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --train-cfm     训练 CFM 模型 (仅 V2)"
             echo "  --train-ar      训练 AR 模型 (仅 V2)"
             echo "  --train-f0-only 只训练 F0 embedding，冻结其他权重 (仅 V2)"
+            echo "  --train-content-only 只训练内容提取相关权重 (仅 V2)"
+            echo "  --train-timbre-only 只训练音色提取相关权重 (仅 V2)"
             echo "  --fp16          使用 FP16 精度 (默认: false)"
             echo "  --distill       设置知识蒸馏权重 (V1版本，默认: 0.0)"
             echo "  --distill-ar    设置 AR 模型知识蒸馏权重 (V2版本，默认: 0.0)"
@@ -734,6 +750,28 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     fi
     echo "工作线程数: $NUM_WORKERS"
     
+    # 询问是否启用内容提取专用训练模式
+    echo ""
+    echo "请选择是否启用专用训练模式:"
+    read -p "是否只训练内容提取相关权重？(y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        TRAIN_CONTENT_ONLY_ARG="--train-content-only"
+        echo "已启用内容提取专用训练模式"
+    else
+        TRAIN_CONTENT_ONLY_ARG=""
+    fi
+    
+    # 询问是否启用音色提取专用训练模式
+    read -p "是否只训练音色提取相关权重？(y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        TRAIN_TIMBRE_ONLY_ARG="--train-timbre-only"
+        echo "已启用音色提取专用训练模式"
+    else
+        TRAIN_TIMBRE_ONLY_ARG=""
+    fi
+    
     # 如果是V2版本，询问训练目标
     if [[ "$VERSION" = "v2" ]]; then
         echo ""
@@ -840,6 +878,14 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
         elif [[ -n "$TRAIN_AR_ARG" ]]; then
             echo "训练目标: AR 模型"
         fi
+    fi
+    
+    # 显示专用训练模式选择
+    if [[ -n "$TRAIN_CONTENT_ONLY_ARG" ]]; then
+        echo "内容提取专用训练模式: 启用"
+    fi
+    if [[ -n "$TRAIN_TIMBRE_ONLY_ARG" ]]; then
+        echo "音色提取专用训练模式: 启用"
     fi
     
     # 显示学习率相关参数
@@ -1001,6 +1047,14 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
             CMD+=" $TRAIN_AR_ARG"
         fi
     fi
+    
+    # 添加内容提取和音色提取专用训练参数
+    if [[ -n "$TRAIN_CONTENT_ONLY_ARG" ]]; then
+        CMD+=" $TRAIN_CONTENT_ONLY_ARG"
+    fi
+    if [[ -n "$TRAIN_TIMBRE_ONLY_ARG" ]]; then
+        CMD+=" $TRAIN_TIMBRE_ONLY_ARG"
+    fi
 
     echo "$CMD"
 
@@ -1105,6 +1159,15 @@ if [ "$VERSION" = "v1" ]; then
     TRAIN_ARGS+=" --grad-clip-norm $GRAD_CLIP_NORM"
     TRAIN_ARGS+=" --distill-temperature $DISTILL_TEMPERATURE"
     
+    # 添加内容提取和音色提取专用训练参数（V1版本）
+    if [[ "$TRAIN_CONTENT_ONLY" = true ]]; then
+        TRAIN_ARGS+=" --train-content-only"
+    fi
+    
+    if [[ "$TRAIN_TIMBRE_ONLY" = true ]]; then
+        TRAIN_ARGS+=" --train-timbre-only"
+    fi
+    
     run_with_logging python train.py $TRAIN_ARGS
 else
     
@@ -1177,6 +1240,15 @@ else
     # 添加 F0 only 训练参数
     if [[ "$TRAIN_F0_ONLY" = true ]]; then
         V2_TRAIN_ARGS+=" --train-f0-only"
+    fi
+    
+    # 添加内容提取和音色提取专用训练参数
+    if [[ "$TRAIN_CONTENT_ONLY" = true ]]; then
+        V2_TRAIN_ARGS+=" --train-content-only"
+    fi
+    
+    if [[ "$TRAIN_TIMBRE_ONLY" = true ]]; then
+        V2_TRAIN_ARGS+=" --train-timbre-only"
     fi
     
     # 使用统一的训练脚本

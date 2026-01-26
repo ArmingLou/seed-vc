@@ -63,6 +63,8 @@ class Trainer:
             # 配对训练参数 - 用于固定源说话人→固定目标说话人的场景
             source_dir=None,  # 源说话人音频目录（可选）
             train_f0_only=False,  # 只训练 F0 embedding，冻结其他权重
+            train_content_only=False,  # 只训练内容提取相关权重
+            train_timbre_only=False,  # 只训练音色提取相关权重
         ):
         self.config_path = config_path
         self.mixed_precision = mixed_precision
@@ -94,6 +96,15 @@ class Trainer:
         self.train_f0_only = train_f0_only
         if train_f0_only:
             print("启用 F0 only 训练模式：只训练 F0 embedding，冻结 CFM 其他权重")
+        
+        # 内容提取和音色提取专用参数
+        self.train_content_only = train_content_only  # 只训练内容提取相关权重
+        self.train_timbre_only = train_timbre_only   # 只训练音色提取相关权重
+        
+        if train_content_only:
+            print("启用内容提取专用训练模式：只训练AR模型和内容提取器")
+        if train_timbre_only:
+            print("启用音色提取专用训练模式：只训练CFM模型和风格编码器")
         
         # Check FORCE_CPU environment variable
         force_cpu = os.environ.get('FORCE_CPU', '0') == '1'
@@ -619,35 +630,93 @@ class Trainer:
             else:
                 self.rmvpe = None
             
-            for p in self.model.parameters():
-                p.requires_grad = False
-            if train_cfm:
-                # F0 only 模式：只训练 f0_embedding，冻结其他权重
-                if self.train_f0_only:
-                    # 检查是否启用了 F0 条件
-                    if not self.f0_condition:
-                        raise ValueError("--train-f0-only 需要配置中启用 f0_condition")
-                    # 只训练 cfm_length_regulator 中的 f0 相关参数
-                    for name, p in self.model.cfm_length_regulator.named_parameters():
-                        if 'f0' in name:
+            # 根据训练模式设置参数训练状态
+            if self.train_content_only:
+                # 只训练内容提取相关权重：AR模型和内容提取器
+                for p in self.model.parameters():
+                    p.requires_grad = False  # 先全部冻结
+                
+                # 启用AR模型相关参数
+                if train_ar:
+                    for p in self.model.ar.parameters():
+                        p.requires_grad = True
+                    for p in self.model.ar_length_regulator.parameters():
+                        p.requires_grad = True
+                    
+                # 启用内容提取器参数
+                for p in self.model.content_extractor_narrow.parameters():
+                    p.requires_grad = True
+                for p in self.model.content_extractor_wide.parameters():
+                    p.requires_grad = True
+                
+                print("内容提取模式：仅启用AR模型和内容提取器参数")
+                
+            elif self.train_timbre_only:
+                # 只训练音色提取相关权重：CFM模型和风格编码器
+                for p in self.model.parameters():
+                    p.requires_grad = False  # 先全部冻结
+                
+                # 启用CFM模型相关参数
+                if train_cfm:
+                    # F0 only 模式特殊处理
+                    if self.train_f0_only:
+                        if not self.f0_condition:
+                            raise ValueError("--train-f0-only 需要配置中启用 f0_condition")
+                        # 只训练 cfm_length_regulator 中的 f0 相关参数
+                        for name, p in self.model.cfm_length_regulator.named_parameters():
+                            if 'f0' in name:
+                                p.requires_grad = True
+                                print(f"F0 only 模式: 训练参数 {name}")
+                            else:
+                                p.requires_grad = False
+                    else:
+                        # 正常CFM训练
+                        for p in self.model.cfm.parameters():
                             p.requires_grad = True
-                            print(f"F0 only 模式: 训练参数 {name}")
-                        else:
+                        for p in self.model.cfm_length_regulator.parameters():
+                            p.requires_grad = True
+                
+                # 启用风格编码器参数
+                for p in self.model.style_encoder.parameters():
+                    p.requires_grad = True
+                
+                print("音色提取模式：仅启用CFM模型和风格编码器参数")
+                
+            else:
+                # 原始逻辑：根据train_cfm和train_ar参数训练
+                for p in self.model.parameters():
+                    p.requires_grad = False
+                
+                # 训练CFM模型（如果设置）
+                if train_cfm:
+                    # F0 only 模式：只训练 f0_embedding，冻结其他权重
+                    if self.train_f0_only:
+                        # 检查是否启用了 F0 条件
+                        if not self.f0_condition:
+                            raise ValueError("--train-f0-only 需要配置中启用 f0_condition")
+                        # 只训练 cfm_length_regulator 中的 f0 相关参数
+                        for name, p in self.model.cfm_length_regulator.named_parameters():
+                            if 'f0' in name:
+                                p.requires_grad = True
+                                print(f"F0 only 模式: 训练参数 {name}")
+                            else:
+                                p.requires_grad = False
+                        # cfm 主体冻结
+                        for p in self.model.cfm.parameters():
                             p.requires_grad = False
-                    # cfm 主体冻结
-                    for p in self.model.cfm.parameters():
-                        p.requires_grad = False
-                else:
-                    # 正常模式：训练所有 CFM 参数
-                    for p in self.model.cfm.parameters():
+                    else:
+                        # 正常模式：训练所有 CFM 参数
+                        for p in self.model.cfm.parameters():
+                            p.requires_grad = True
+                        for p in self.model.cfm_length_regulator.parameters():
+                            p.requires_grad = True
+                
+                # 训练AR模型（如果设置）
+                if train_ar:
+                    for p in self.model.ar.parameters():
                         p.requires_grad = True
-                    for p in self.model.cfm_length_regulator.parameters():
+                    for p in self.model.ar_length_regulator.parameters():
                         p.requires_grad = True
-            if train_ar:
-                for p in self.model.ar.parameters():
-                    p.requires_grad = True
-                for p in self.model.ar_length_regulator.parameters():
-                    p.requires_grad = True
 
 
     def _init_optimizers(self):
@@ -1965,6 +2034,9 @@ def main(args):
         source_dir=args.source_dir,
         # F0 only 训练模式
         train_f0_only=args.train_f0_only,
+        # 内容提取和音色提取专用参数
+        train_content_only=args.train_content_only,
+        train_timbre_only=args.train_timbre_only,
     )
     # 添加fp16错误处理
     try:
@@ -1999,6 +2071,10 @@ if __name__ == '__main__':
     parser.add_argument('--train-ar', action='store_true', help='Train AR model')
     parser.add_argument('--train-f0-only', action='store_true', 
                        help='只训练 F0 embedding，冻结 CFM 其他权重（用于快速微调 F0 功能）')
+    parser.add_argument('--train-content-only', action='store_true',
+                       help='只训练内容提取相关权重：AR模型和内容提取器（用于优化内容提取能力）')
+    parser.add_argument('--train-timbre-only', action='store_true',
+                       help='只训练音色提取相关权重：CFM模型和风格编码器（用于优化音色转换能力）')
     parser.add_argument('--fp16', action='store_true', help='Use fp16 precision')
     
     # 验证集相关参数

@@ -50,6 +50,8 @@ class Trainer:
                  distill=0.0,  # 添加distill参数，默认值为0.0
                  distill_temperature=1.0,  # 添加温度参数，默认值为1.0
                  grad_clip_norm=1.0,  # 添加梯度裁剪参数，默认值为1.0
+                 train_content_only=False,  # 只训练内容提取相关权重
+                 train_timbre_only=False,  # 只训练音色提取相关权重
                 ):
         self.device = torch.device(device)
         self.fp16 = fp16
@@ -93,6 +95,15 @@ class Trainer:
         self.distill_temperature = distill_temperature  # 保存蒸馏温度参数
         self.grad_clip_norm = grad_clip_norm  # 保存梯度裁剪参数
         self.use_distill = distill > 0.0  # 根据权重值判断是否使用蒸馏
+        
+        # 内容提取和音色提取专用参数
+        self.train_content_only = train_content_only  # 只训练内容提取相关权重
+        self.train_timbre_only = train_timbre_only   # 只训练音色提取相关权重
+        
+        if train_content_only:
+            print("启用内容提取专用训练模式：只训练长度调节器（内容提取部分）")
+        if train_timbre_only:
+            print("启用音色提取专用训练模式：只训练CFM模型和风格编码器（音色提取部分）")
         # 注意：不要在这里初始化 switched_to_val_scheduler，因为它会在检查点恢复时被设置
         # 但是在 fresh training 的情况下需要初始化
         # 使用 hasattr 检查是否已经设置过，避免覆盖检查点中恢复的值
@@ -154,6 +165,29 @@ class Trainer:
         _ = [self.model[key].to(self.device) for key in self.model]
         self.model.cfm.estimator.setup_caches(max_batch_size=batch_size, max_seq_length=8192)
 
+        # 根据训练模式设置参数训练状态
+        if self.train_content_only:
+            # 只训练内容提取相关权重：长度调节器
+            for key in self.model:
+                for p in self.model[key].parameters():
+                    p.requires_grad = False  # 先全部冻结
+            # 启用长度调节器参数
+            for p in self.model.length_regulator.parameters():
+                p.requires_grad = True
+            print("内容提取模式：仅启用长度调节器参数")
+        elif self.train_timbre_only:
+            # 只训练音色提取相关权重：CFM模型
+            for key in self.model:
+                for p in self.model[key].parameters():
+                    p.requires_grad = False  # 先全部冻结
+            # 启用CFM模型参数
+            for p in self.model.cfm.parameters():
+                p.requires_grad = True
+            print("音色提取模式：仅启用CFM模型参数")
+        else:
+            # 默认：训练所有模型参数
+            pass
+        
         # initialize optimizers after preparing models for compatibility with FSDP
         self.optimizer = build_optimizer({key: self.model[key] for key in self.model},
                                          lr=float(scheduler_params['base_lr']))
@@ -1334,11 +1368,27 @@ class Trainer:
         base_clip_norm = self.grad_clip_norm
         # 降低最低限制，允许更严格的梯度裁剪
         adaptive_clip_norm = max(0.01, min(base_clip_norm, 10.0 / (loss_total.item() + 1e-8)))
-        torch.nn.utils.clip_grad_norm_(self.model.cfm.parameters(), adaptive_clip_norm)
-        torch.nn.utils.clip_grad_norm_(self.model.length_regulator.parameters(), adaptive_clip_norm)
         
-        self.optimizer.step('cfm')
-        self.optimizer.step('length_regulator')
+        # 根据训练模式选择需要裁剪的参数
+        if self.train_content_only:
+            # 只对长度调节器参数进行梯度裁剪
+            torch.nn.utils.clip_grad_norm_(self.model.length_regulator.parameters(), adaptive_clip_norm)
+        elif self.train_timbre_only:
+            # 只对CFM模型参数进行梯度裁剪
+            torch.nn.utils.clip_grad_norm_(self.model.cfm.parameters(), adaptive_clip_norm)
+        else:
+            # 对所有参数进行梯度裁剪
+            torch.nn.utils.clip_grad_norm_(self.model.cfm.parameters(), adaptive_clip_norm)
+            torch.nn.utils.clip_grad_norm_(self.model.length_regulator.parameters(), adaptive_clip_norm)
+        
+        # 根据训练模式选择需要更新的优化器
+        if self.train_content_only:
+            self.optimizer.step('length_regulator')
+        elif self.train_timbre_only:
+            self.optimizer.step('cfm')
+        else:
+            self.optimizer.step('cfm')
+            self.optimizer.step('length_regulator')
         
         # 使用新的学习率调整机制
         self._adjust_learning_rate(loss_total.item())
@@ -1899,6 +1949,8 @@ def main(args):
         distill=args.distill,  # 添加distill参数
         grad_clip_norm=args.grad_clip_norm,  # 添加梯度裁剪参数
         distill_temperature=args.distill_temperature,  # 添加蒸馏温度参数
+        train_content_only=args.train_content_only,  # 内容提取专用训练
+        train_timbre_only=args.train_timbre_only,  # 音色提取专用训练
     )
     trainer.train()
     
@@ -1948,6 +2000,10 @@ if __name__ == '__main__':
     
     parser.add_argument('--distill', type=float, default=0.0,
                        help='Enable knowledge distillation with specified weight (0.0 means no distillation)')
+    parser.add_argument('--train-content-only', action='store_true',
+                       help='只训练内容提取相关权重：长度调节器（用于优化内容提取能力）')
+    parser.add_argument('--train-timbre-only', action='store_true',
+                       help='只训练音色提取相关权重：CFM模型（用于优化音色转换能力）')
     parser.add_argument('--language', type=str, default=None,
                        help='Language for Whisper model')
     args = parser.parse_args()
