@@ -55,6 +55,9 @@ class Trainer:
                 ):
         self.device = torch.device(device)
         self.fp16 = fp16
+        self.config_path = config_path
+        self.dataset_dir = data_dir  # 保存数据集目录
+        self.num_workers = num_workers  # 保存num_workers为实例属性
         config = yaml.safe_load(open(config_path))
         # 使用传入的run_name，不再添加数据集名称后缀，因为在调用处已经处理过了
         self.log_dir = os.path.join(config['log_dir'], run_name)
@@ -99,6 +102,10 @@ class Trainer:
         # 内容提取和音色提取专用参数
         self.train_content_only = train_content_only  # 只训练内容提取相关权重
         self.train_timbre_only = train_timbre_only   # 只训练音色提取相关权重
+        
+        # 配对训练相关初始化
+        # 注意：配对数据集路径需要在main函数中传递给Trainer，或者通过其他方式传入
+        # 由于初始化函数中无法直接获取命令行参数，我们将在main函数中设置配对训练状态
         
         if train_content_only:
             print("启用内容提取专用训练模式：只训练长度调节器（内容提取部分）")
@@ -1681,7 +1688,7 @@ class Trainer:
             if not teacher_in_eval_mode:
                 print("警告: 教师模型未处于评估模式，正在强制设置...")
                 _ = [self.teacher_model[key].eval() for key in self.teacher_model]
-        
+    
         firstItersIdx = self.iters % len(self.train_dataloader)
         if firstItersIdx == 0 and self.iters != 0:
             self.epoch += 1
@@ -1690,26 +1697,35 @@ class Trainer:
             print("Reached max epochs, stopping training")
             return
         # 为当前epoch设置数据集的随机索引序列
-        self.train_dataset.set_epoch(self.epoch)
-        for i, batch in enumerate(tqdm(self.train_dataloader)): 
-            
-            stepInEpoch = self.iters % len(self.train_dataloader)
+        if hasattr(self, 'paired_training') and self.paired_training:
+            # 配对训练模式
+            self.train_dataset = self.paired_dataloader.dataset  # 使用配对数据集
+            self.train_dataset.set_epoch(self.epoch)
+            data_loader = self.paired_dataloader
+        else:
+            # 普通训练模式
+            self.train_dataset.set_epoch(self.epoch)
+            data_loader = self.train_dataloader
+        
+        for i, batch in enumerate(tqdm(data_loader)): 
+                
+            stepInEpoch = self.iters % len(data_loader)
             if stepInEpoch != i:
                 continue
             self.iters += 1
-            
+                
             if self.iters > self.max_steps:
                 self.should_stop = True
                 self.should_copy = False
                 print("\nReached max steps, stopping training")
                 return
-            
+                
             if self.iters == 1:
                 # 整个训练开始前，先验证一次。只打印。
                 first_val_loss = self.validate()
                 print(f"\nFirst validation loss: 【{first_val_loss}】")
+                    
                 
-            
             # Ensure deterministic behavior by setting seeds based on current state
             seed = 1234 + self.iters
             random.seed(seed)
@@ -1718,27 +1734,32 @@ class Trainer:
             if torch.cuda.is_available():
                 torch.cuda.manual_seed(seed)
                 torch.cuda.manual_seed_all(seed)
-            
+                
             # Also set seed for built-in hash randomization
             os.environ['PYTHONHASHSEED'] = str(seed)
-            
-            # Handle both old and new batch formats
-            if len(batch) == 5:
-                waves, mels, wave_lengths, mel_input_length, file_paths = batch
+                            
+            if hasattr(self, 'paired_training') and self.paired_training:
+                # 配对训练模式：直接使用批次数据，不需要特殊处理
+                loss = self.train_one_step_paired(batch)
             else:
-                waves, mels, wave_lengths, mel_input_length = batch
-                file_paths = None
-            # 检查batch中每个元素的类型，只对张量进行设备迁移
-            processed_batch = []
-            for item in [waves, mels, wave_lengths, mel_input_length]:
-                if isinstance(item, torch.Tensor):
-                    processed_batch.append(item.to(self.device))
+                # 普通训练模式：处理标准批次格式
+                # Handle both old and new batch formats
+                if len(batch) == 5:
+                    waves, mels, wave_lengths, mel_input_length, file_paths = batch
                 else:
-                    processed_batch.append(item)
-            batch = processed_batch
-            if file_paths is not None:
-                batch.append(file_paths)
-            loss = self.train_one_step(batch)
+                    waves, mels, wave_lengths, mel_input_length = batch
+                    file_paths = None
+                # 检查batch中每个元素的类型，只对张量进行设备迁移
+                processed_batch = []
+                for item in [waves, mels, wave_lengths, mel_input_length]:
+                    if isinstance(item, torch.Tensor):
+                        processed_batch.append(item.to(self.device))
+                    else:
+                        processed_batch.append(item)
+                batch = processed_batch
+                if file_paths is not None:
+                    batch.append(file_paths)
+                loss = self.train_one_step(batch)
             # 使用指数移动平均计算ema_loss，与train_v2.py保持一致
             if not hasattr(self, 'loss_smoothing_rate'):
                 self.loss_smoothing_rate = 0.99
@@ -1754,7 +1775,7 @@ class Trainer:
                 val_loss = self.validate()
                 if val_loss is not None:
                     print(f"\nValidation loss at step {self.iters}: val_loss【{val_loss}】/「{self.ema_loss}」loss")
-                    
+                        
                     # 早停机制
                     if val_loss < self.best_val_loss:
                         self.best_val_loss = val_loss
@@ -1766,19 +1787,19 @@ class Trainer:
                         print(f"Best validation loss: {self.best_val_loss}")
                         self.patience_counter += 1
                         print(f"No improvement in validation loss. Patience: {self.patience_counter}/{self.patience}")
-                        
+                            
                         if self.patience_counter >= self.patience:
                             print(f"Early stopping triggered at step {self.iters}")
                             self.should_stop = True
                             self.should_copy = True
                             self._save_checkpoint()
                             return
-                    
+                        
                     # 在预热阶段结束后，根据验证损失情况决定是否手动调整学习率
                     if self.iters >= self.warmup_steps:
                         # 获取当前学习率
                         old_lr = self.optimizer.optimizers['cfm'].param_groups[0]['lr']
-                        
+                            
                         # 当patience_counter达到一定阈值时，手动降低学习率
                         # 每当patience_counter增加时，按0.5的比例降低学习率
                         switch_patience = max(1, self.patience // 4)  # 使用早停耐心值的四分之一作为切换耐心值
@@ -1786,11 +1807,11 @@ class Trainer:
                             # 获取当前学习率并降低它
                             current_lr = self.optimizer.optimizers['cfm'].param_groups[0]['lr']
                             new_lr = max(current_lr * 0.5, self.min_lr)
-                            
+                                
                             # 手动设置新的学习率
                             for param_group in self.optimizer.optimizers['cfm'].param_groups:
                                 param_group['lr'] = new_lr
-                            
+                                
                             print(f"Learning rate manually adjusted from {current_lr:.2e} to 《{new_lr:.2e}》 based on validation loss plateau")
                         else:
                             new_lr = self.optimizer.optimizers['cfm'].param_groups[0]['lr']
@@ -1802,13 +1823,277 @@ class Trainer:
                 print("\nReached max steps, stopping training")
                 self._save_checkpoint()
                 return # 不归档，只保存检查点。
-                
+                    
             if self.iters % self.save_interval == 0 or self.iters >= self.max_steps:
                 self._save_checkpoint()
-            
+                
             # 检查是否应该早停
             if self.should_stop:
                 break
+
+    def enable_paired_training(self, source_dataset_path, random_reference=False):
+        """启用配对训练模式"""
+        from data.paired_dataset import build_paired_dataloader
+        
+        self.paired_training = True
+        self.source_dataset_path = source_dataset_path
+        self.random_reference = random_reference
+        
+        # 获取配置中的预处理参数
+        config = yaml.safe_load(open(self.config_path))
+        preprocess_params = config['preprocess_params']
+        
+        # 创建配对数据加载器
+        # 将random_reference参数转换为same_reference参数（逻辑相反）
+        # random_reference=True -> same_reference=False (使用target集合中的其他音频作为参考)
+        # random_reference=False -> same_reference=True (使用target本身作为参考)
+        same_reference = not random_reference
+        
+        self.paired_dataloader = build_paired_dataloader(
+            target_path=self.dataset_dir,  # 使用原始数据集作为目标
+            source_path=source_dataset_path,  # 使用指定路径作为源
+            spect_params=preprocess_params['spect_params'],
+            sr=self.sr,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+            shuffle=True,  # 配对训练通常打乱数据
+            same_reference=same_reference  # same_reference=True表示target既作为参考也作为目标
+        )
+        
+        print(f"配对训练已启用，源路径: {source_dataset_path}, 目标路径: {self.dataset_dir}, 随机参考: {random_reference}")
+        
+    def train_one_step_paired(self, batch):
+        """配对训练一个步骤，使用V2的配对训练逻辑：源音频->目标音频（目标音频既作为参考也作为目标）"""
+        # 配对批次格式: [source_waves, target_waves, ref_waves, target_mels, source_path, target_path, ref_path]
+        # 或者data/paired_dataset.py的collate函数输出格式: {source_waves, source_wave_lens, target_waves, target_wave_lens, ref_waves, ref_wave_lens, target_mels, target_mel_lens}
+        
+        # 检查batch格式，可能是字典格式（data/paired_dataset风格）或列表格式
+        if isinstance(batch, dict):
+            # data/paired_dataset.py的字典格式
+            source_waves = batch['source_waves']
+            source_wave_lens = batch['source_wave_lens']
+            target_waves = batch['target_waves']
+            target_wave_lens = batch['target_wave_lens']
+            
+            # 根据random_reference参数决定参考音频
+            # 当random_reference=True时，使用target集合中的其他音频作为参考（ref_waves）
+            # 当random_reference=False时，使用target本身作为参考（target_waves）
+            if self.random_reference:
+                # 如果启用了随机参考，则使用ref_waves作为参考
+                ref_waves = batch['ref_waves']
+                ref_wave_lens = batch['ref_wave_lens']
+            else:
+                # 如果未启用随机参考，则target既作为参考也作为目标
+                ref_waves = batch['target_waves']  # target作为参考音频
+                ref_wave_lens = batch['target_wave_lens']
+            
+            target_mels = batch['target_mels']
+            target_mel_lens = batch['target_mel_lens']
+        else:
+            raise ValueError(f"配对批次格式不正确，应为字典格式（来自data/paired_dataset.py的collate函数）")
+        
+        B = source_waves.size(0)
+        
+        # 获取源音频的semantic features
+        source_waves_16k = torchaudio.functional.resample(source_waves, self.sr, 16000)
+        if isinstance(batch, dict):
+            source_wave_lengths_16k = (source_wave_lens.float() * 16000 / self.sr).long()
+        else:
+            source_wave_lengths_16k = (source_wave_lengths.float() * 16000 / self.sr).long()
+        
+        if self.f0_condition:
+            F0_ori = self.rmvpe.infer_from_audio_batch(source_waves_16k)
+        else:
+            F0_ori = None
+        
+        # 提取源音频的语义特征
+        S_ori = self.semantic_fn(source_waves_16k)
+        
+        # 使用长度调节器将源语义特征转换为条件特征
+        if isinstance(batch, dict):
+            target_lengths = target_mel_lens
+        else:
+            target_lengths = target_mel_lengths
+        
+        ori_cond, _, ori_codes, ori_commitment_loss, ori_codebook_loss = (
+            self.model.length_regulator(S_ori, ylens=target_lengths, f0=F0_ori)
+        )
+        
+        if ori_commitment_loss is None:
+            ori_commitment_loss = torch.tensor(0.0, device=self.device)
+            ori_codebook_loss = torch.tensor(0.0, device=self.device)
+        
+        # 使用目标音频（作为参考）的speaker embedding
+        if isinstance(batch, dict):
+            ref_waves_16k = torchaudio.functional.resample(ref_waves, self.sr, 16000)
+            ref_wave_lengths_16k = (ref_wave_lens.float() * 16000 / self.sr).long()
+        else:
+            ref_waves_16k = torchaudio.functional.resample(ref_waves, self.sr, 16000)
+            ref_wave_lengths_16k = (ref_wave_lengths.float() * 16000 / self.sr).long()
+        
+        # 使用参考音频的speaker embedding
+        feat_list = []
+        for bib in range(B):
+            # Check if we're using MPS device and handle accordingly
+            if self.device.type == "mps":
+                # MPS doesn't support ComplexFloat type, compute on CPU and move back
+                if isinstance(batch, dict):
+                    wave_cpu = ref_waves_16k[bib:bib + 1, :ref_wave_lens[bib]].cpu()
+                else:
+                    wave_cpu = ref_waves_16k[bib:bib + 1, :ref_wave_lengths_16k[bib]].cpu()
+                feat = kaldi.fbank(
+                    wave_cpu,
+                    num_mel_bins=80,
+                    dither=0,
+                    sample_frequency=16000
+                )
+                # Move the result back to MPS device
+                feat = feat.to(self.device)
+            else:
+                if isinstance(batch, dict):
+                    feat = kaldi.fbank(
+                        ref_waves_16k[bib:bib + 1, :ref_wave_lens[bib]],
+                        num_mel_bins=80,
+                        dither=0,
+                        sample_frequency=16000
+                    )
+                else:
+                    feat = kaldi.fbank(
+                        ref_waves_16k[bib:bib + 1, :ref_wave_lengths_16k[bib]],
+                        num_mel_bins=80,
+                        dither=0,
+                        sample_frequency=16000
+                    )
+            feat = feat - feat.mean(dim=0, keepdim=True)
+            feat_list.append(feat)
+        y_list = []
+        with torch.no_grad():
+            for feat in feat_list:
+                y = self.sv_fn(feat.unsqueeze(0))
+                y_list.append(y)
+        y = torch.cat(y_list, dim=0)
+        
+        # 使用target_mels作为目标
+        if isinstance(batch, dict):
+            x = target_mels
+        else:
+            x = target_mels
+        
+        # 确保条件特征长度与目标长度一致
+        target_size = x.size(2)
+        common_min_len = min(target_size, ori_cond.size(1))
+        x = x[:, :, :common_min_len]
+        ori_cond = ori_cond[:, :common_min_len]
+        target_lengths = torch.clamp(target_lengths, max=common_min_len)
+        
+        # 为了确保教师模型和学生模型使用相同的随机种子，我们需要固定随机种子
+        # 保存当前的随机种子状态
+        torch_rng_state = torch.get_rng_state()
+        cuda_rng_state = None
+        if torch.cuda.is_available():
+            cuda_rng_state = torch.cuda.get_rng_state()
+        
+        # 先调用学生模型（使用当前的随机种子）
+        loss, student_output = self.model.cfm(x, target_lengths, torch.zeros_like(target_lengths), ori_cond, y)
+        
+        # 如果有教师模型，添加知识蒸馏损失
+        distill_loss = torch.tensor(0.0, device=self.device)
+        teacher_output = None
+        if self.teacher_model is not None and self.use_distill:
+            # 使用与学生模型相同的随机种子
+            torch.set_rng_state(torch_rng_state)
+            if cuda_rng_state is not None:
+                torch.cuda.set_rng_state(cuda_rng_state)
+            
+            # 确保教师模型处于评估模式
+            _ = [self.teacher_model[key].eval() for key in self.teacher_model]
+            # 添加额外的检查，确保教师模型的所有模块都处于评估模式
+            def check_and_set_eval(model, model_name):
+                for name, module in model.named_modules():
+                    if hasattr(module, 'training') and module.training:
+                        print(f"警告: {model_name}中的模块 {name} 未处于评估模式，正在强制设置...")
+                        module.eval()
+            
+            for key in self.teacher_model:
+                check_and_set_eval(self.teacher_model[key], f"教师模型 {key}")
+            
+            with torch.no_grad():
+                # 使用教师模型生成目标输出
+                teacher_loss, teacher_output = self.teacher_model.cfm(x, target_lengths, torch.zeros_like(target_lengths), ori_cond, y)
+            
+            # 计算学生模型和教师模型输出之间的蒸馏损失            # 确保student_output和teacher_output都是张量且形状匹配
+            if isinstance(student_output, list):
+                # 如果是列表，取第一个元素
+                student_output = student_output[0] if student_output else torch.tensor(0.0, device=self.device)
+            if isinstance(teacher_output, list):
+                # 如果是列表，取第一个元素
+                teacher_output = teacher_output[0] if teacher_output else torch.tensor(0.0, device=self.device)
+            # 确保数据类型一致
+            if student_output.dtype != teacher_output.dtype:
+                print(f"警告: 蒸馏损失数据类型不一致 - student: {student_output.dtype}, teacher: {teacher_output.dtype}")
+                teacher_output = teacher_output.to(student_output.dtype)
+            # 确保两个张量形状匹配
+            if student_output.size() == teacher_output.size():
+                # 使用KL散度计算蒸馏损失，添加温度参数支持
+                distill_loss = self.compute_kl_distill_loss(student_output, teacher_output.detach(), temperature=self.distill_temperature)
+            else:
+                # 如果形状不匹配，尝试调整形状
+                min_size = min(student_output.size(0), teacher_output.size(0))
+                student_output_adj = student_output[:min_size] if student_output.size(0) > min_size else student_output
+                teacher_output_adj = teacher_output[:min_size] if teacher_output.size(0) > min_size else teacher_output
+                # 使用KL散度计算蒸馏损失，添加温度参数支持
+                distill_loss = self.compute_kl_distill_loss(student_output_adj, teacher_output_adj.detach(), temperature=self.distill_temperature)
+        else:
+            pass
+                # 计算各损失组件
+        # 使用动态损失平衡机制，根据初始化时计算的缩放因子调整各损失组件
+        
+        self.loss_scaling_factors, loss_total, scaled_main_loss, commitment_loss_component, codebook_loss_component, distill_loss_component = self._compute_loss_and_dynamic_loss_scaling_factors(loss, ori_commitment_loss, ori_commitment_loss, ori_codebook_loss, ori_codebook_loss, distill_loss)
+        
+        # 打印详细的损失组件信息（每log_interval步打印一次）
+        if self.iters % self.log_interval == 0:
+            print(f"\nPaired Training - Detailed Loss Components at epoch {self.epoch}, step {self.iters}:")
+            print(f"  Main CFM Loss: {scaled_main_loss.item():.6f} (raw: {loss.item():.6f}, scale: {self.loss_scaling_factors['main']:.6f})")
+            print(f"  Commitment Loss: {commitment_loss_component.item():.6f} (scale: {self.loss_scaling_factors['commitment']:.6f})")
+            print(f"  Codebook Loss: {codebook_loss_component.item():.6f} (scale: {self.loss_scaling_factors['codebook']:.6f})")
+            if self.teacher_model is not None and self.use_distill:
+                print(f"  Distill Loss: {distill_loss_component.item():.10f} (raw: {distill_loss.item():.10f}, scale: {self.loss_scaling_factors['distill']:.6f})")
+            print(f"  Total Training Loss: {loss_total.item():.6f}")
+        
+        self.optimizer.zero_grad()
+        loss_total.backward()
+        
+        # 自适应梯度裁剪 - 根据损失值动态调整裁剪阈值
+        # 基础阈值为self.grad_clip_norm，但当损失较大时会降低阈值
+        base_clip_norm = self.grad_clip_norm
+        # 降低最低限制，允许更严格的梯度裁剪
+        adaptive_clip_norm = max(0.01, min(base_clip_norm, 10.0 / (loss_total.item() + 1e-8)))
+        
+        # 根据训练模式选择需要裁剪的参数
+        if self.train_content_only:
+            # 只对长度调节器参数进行梯度裁剪
+            torch.nn.utils.clip_grad_norm_(self.model.length_regulator.parameters(), adaptive_clip_norm)
+        elif self.train_timbre_only:
+            # 只对CFM模型参数进行梯度裁剪
+            torch.nn.utils.clip_grad_norm_(self.model.cfm.parameters(), adaptive_clip_norm)
+        else:
+            # 对所有参数进行梯度裁剪
+            torch.nn.utils.clip_grad_norm_(self.model.cfm.parameters(), adaptive_clip_norm)
+            torch.nn.utils.clip_grad_norm_(self.model.length_regulator.parameters(), adaptive_clip_norm)
+        
+        # 根据训练模式选择需要更新的优化器
+        if self.train_content_only:
+            self.optimizer.step('length_regulator')
+        elif self.train_timbre_only:
+            self.optimizer.step('cfm')
+        else:
+            self.optimizer.step('cfm')
+            self.optimizer.step('length_regulator')
+        
+        # 使用新的学习率调整机制
+        self._adjust_learning_rate(loss_total.item())
+        
+        return loss_total.detach().item()
 
     def train(self):
         # Ensure ema_loss is initialized
@@ -1923,7 +2208,10 @@ def main(args):
     dataset_name = os.path.basename(os.path.normpath(args.dataset_dir))
     version_run_name = f"{args.run_name}_{dataset_name}"
     
-
+    # 如果提供了源数据集路径，则启用配对训练
+    if args.source_dir:
+        print(f"启用配对训练模式，源数据集路径: {args.source_dir}, 目标数据集路径: {args.dataset_dir}, 随机参考: {args.random_reference}")
+    
     trainer = Trainer(
         config_path=args.config,
         pretrained_ckpt_path=args.pretrained_ckpt,
@@ -1952,6 +2240,10 @@ def main(args):
         train_content_only=args.train_content_only,  # 内容提取专用训练
         train_timbre_only=args.train_timbre_only,  # 音色提取专用训练
     )
+    
+    # 如果提供了源数据集路径，则设置配对训练
+    if args.source_dir:
+        trainer.enable_paired_training(args.source_dir, args.random_reference)
     trainer.train()
     
     # 训练完成后，将ft_model.pth和配置文件拷贝到基础运行目录
@@ -2006,5 +2298,9 @@ if __name__ == '__main__':
                        help='只训练音色提取相关权重：CFM模型（用于优化音色转换能力）')
     parser.add_argument('--language', type=str, default=None,
                        help='Language for Whisper model')
+    parser.add_argument('--source-dir', type=str, default=None,
+                       help='源说话人音频目录（平行语料），文件名需与 target 对应')
+    parser.add_argument('--random-reference', action='store_true',
+                       help='参考音频从 target 集合中随机选择（而非 target 本身）')
     args = parser.parse_args()
     main(args)

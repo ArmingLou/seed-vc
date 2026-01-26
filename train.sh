@@ -146,6 +146,9 @@ NUM_WORKERS=0
 SOURCE_DIR=""
 RANDOM_REFERENCE=false
 
+# V1配对训练参数
+PAIRED_DATASET_DIR=""
+
 # F0 only 训练模式（V2版本特有）
 TRAIN_F0_ONLY=false
 
@@ -364,6 +367,16 @@ while [[ $# -gt 0 ]]; do
             echo "启用音色提取专用训练模式"
             shift
             ;;
+        --source-dir)
+            SOURCE_DIR="$2"
+            echo "设置源说话人音频目录: $SOURCE_DIR"
+            shift 2
+            ;;
+        --random-reference)
+            RANDOM_REFERENCE=true
+            echo "启用随机参考音频模式"
+            shift
+            ;;
 
         *)
             echo "未知参数: $1"
@@ -409,6 +422,9 @@ while [[ $# -gt 0 ]]; do
             
             echo "  --batch-size|-b         设置批处理大小 (默认: 4)"
             echo "  --num-workers|-w        设置工作线程数 (默认: 0)"
+            
+            echo "  --source-dir            源说话人音频目录（平行语料），文件名需与 target 对应 (V1配对训练)"
+            echo "  --random-reference      参考音频从 target 集合中随机选择（而非 target 本身） (V1配对训练)"
             
             echo "  -I, --interactive 交互式选择参数"
             exit 1
@@ -473,6 +489,31 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
         else
             echo "未指定配置文件"
         fi
+    fi
+    
+    # 询问V1配对训练源数据集目录
+    read -p "是否指定V1配对训练源数据集目录？(y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo "请选择V1配对训练源数据集目录:"
+        SELECTED_SOURCE_DIR=$(select_directory "请选择V1配对训练源数据集目录" "./data/source")
+        if [[ -n "$SELECTED_SOURCE_DIR" ]]; then
+            SOURCE_DIR="$SELECTED_SOURCE_DIR"
+            echo "已选择V1配对训练源数据集目录: $SOURCE_DIR"
+        else
+            echo "未指定V1配对训练源数据集目录"
+        fi
+    fi
+    
+    # 询问是否启用随机参考音频模式
+    read -p "是否启用随机参考音频模式？(y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        RANDOM_REFERENCE=true
+        echo "已启用随机参考音频模式"
+    else
+        RANDOM_REFERENCE=false
+        echo "未启用随机参考音频模式"
     fi
     
     # 询问数据集目录（必填）
@@ -888,6 +929,17 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
         echo "音色提取专用训练模式: 启用"
     fi
     
+    # 显示V1配对训练参数
+    if [[ -n "$SOURCE_DIR" ]]; then
+        echo "源数据集目录: $SOURCE_DIR"
+    fi
+    
+    if [[ "$RANDOM_REFERENCE" = true ]]; then
+        echo "随机参考音频模式: 启用"
+    else
+        echo "随机参考音频模式: 未启用"
+    fi
+    
     # 显示学习率相关参数
     echo "最小学习率: $MIN_LR"
     echo "loss日志打印间隔step: $L0SS_LOG_INTERVAL"
@@ -950,6 +1002,15 @@ if [[ "$INTERACTIVE_MODE" = true ]]; then
     # 添加日志文件参数
     if [[ -n "$LOG_FILE" ]]; then
         CMD+=" --log-file $LOG_FILE"
+    fi
+    
+    # 添加V1配对训练参数
+    if [[ -n "$SOURCE_DIR" ]]; then
+        CMD+=" --source-dir $SOURCE_DIR"
+    fi
+    
+    if [[ "$RANDOM_REFERENCE" = true ]]; then
+        CMD+=" --random-reference"
     fi
     
     CMD+=" --${VERSION}"
@@ -1166,6 +1227,15 @@ if [ "$VERSION" = "v1" ]; then
     
     if [[ "$TRAIN_TIMBRE_ONLY" = true ]]; then
         TRAIN_ARGS+=" --train-timbre-only"
+    fi
+    
+    # 添加V1配对训练参数
+    if [[ -n "$SOURCE_DIR" ]]; then
+        TRAIN_ARGS+=" --source-dir $SOURCE_DIR"
+    fi
+    
+    if [[ "$RANDOM_REFERENCE" = true ]]; then
+        TRAIN_ARGS+=" --random-reference"
     fi
     
     run_with_logging python train.py $TRAIN_ARGS
