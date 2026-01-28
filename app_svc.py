@@ -45,7 +45,7 @@ def load_models(args, config_path=None, checkpoint_path=None):
     else:
         # Load default config from HF
         _, dit_config_path = load_custom_model_from_hf("Plachta/Seed-VC",
-                                                         "DiT_seed_v2_uvit_whisper_base_f0_44k_bigvgan_pruned_ft_ema_v2.pth",
+                                                         "DiT_seed_v2_uvit_whisper_base_f0_44k_bigvgan_pruned_ft_ema.pth",
                                                          "config_dit_mel_seed_uvit_whisper_base_f0_44k.yml")
     
     # Handle checkpoint file - independent of config file
@@ -58,7 +58,7 @@ def load_models(args, config_path=None, checkpoint_path=None):
     else:
         # Load default checkpoint from HF
         dit_checkpoint_path = load_custom_model_from_hf("Plachta/Seed-VC",
-                                                         "DiT_seed_v2_uvit_whisper_base_f0_44k_bigvgan_pruned_ft_ema_v2.pth",
+                                                         "DiT_seed_v2_uvit_whisper_base_f0_44k_bigvgan_pruned_ft_ema.pth",
                                                          None)
     
     print(f"Loading config from {dit_config_path}")
