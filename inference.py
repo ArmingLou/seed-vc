@@ -1,7 +1,7 @@
 import os
 import numpy as np
 
-os.environ['HF_HUB_CACHE'] = './checkpoints/hf_cache'
+os.environ["HF_HUB_CACHE"] = "./checkpoints/hf_cache"
 # 设置 MPS 回退到 CPU 的环境变量
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 import shutil
@@ -10,7 +10,7 @@ import argparse
 import torch
 import yaml
 
-warnings.simplefilter('ignore')
+warnings.simplefilter("ignore")
 
 # load packages
 import random
@@ -29,7 +29,7 @@ from hf_utils import load_custom_model_from_hf
 # 根据环境变量决定是否强制使用 CPU
 if os.environ.get("FORCE_CPU", "0") == "1":
     device = torch.device("cpu")
-elif hasattr(torch, 'xpu') and torch.xpu.is_available():
+elif hasattr(torch, "xpu") and torch.xpu.is_available():
     device = torch.device("xpu")
 elif torch.cuda.is_available():
     device = torch.device("cuda")
@@ -39,40 +39,50 @@ else:
     device = torch.device("cpu")
 
 fp16 = False
+
+
 def load_models(args):
     global fp16, whisper_model
     fp16 = args.fp16
     # 不再根据设备类型强制修改fp16，而是根据参数决定
     # 仅在需要时打印警告信息
     if (device.type == "cpu" or device.type == "mps") and fp16:
-        print(f"Warning: fp16 is enabled for {device.type} device, which may cause issues")
+        print(
+            f"Warning: fp16 is enabled for {device.type} device, which may cause issues"
+        )
     if not args.f0_condition:
         if args.checkpoint is None:
-            dit_checkpoint_path, dit_config_path = load_custom_model_from_hf("Plachta/Seed-VC",
-                                                                            "DiT_seed_v2_uvit_whisper_small_wavenet_bigvgan_pruned.pth",
-                                                                            "config_dit_mel_seed_uvit_whisper_small_wavenet.yml")
+            dit_checkpoint_path, dit_config_path = load_custom_model_from_hf(
+                "Plachta/Seed-VC",
+                "DiT_seed_v2_uvit_whisper_small_wavenet_bigvgan_pruned.pth",
+                "config_dit_mel_seed_uvit_whisper_small_wavenet.yml",
+            )
         else:
             dit_checkpoint_path = args.checkpoint
             dit_config_path = args.config
         f0_fn = None
     else:
         if args.checkpoint is None:
-            dit_checkpoint_path, dit_config_path = load_custom_model_from_hf("Plachta/Seed-VC",
-                                                                             "DiT_seed_v2_uvit_whisper_base_f0_44k_bigvgan_pruned_ft_ema.pth",
-                                                                             "config_dit_mel_seed_uvit_whisper_base_f0_44k.yml")
+            dit_checkpoint_path, dit_config_path = load_custom_model_from_hf(
+                "Plachta/Seed-VC",
+                "DiT_seed_v2_uvit_whisper_base_f0_44k_bigvgan_pruned_ft_ema.pth",
+                "config_dit_mel_seed_uvit_whisper_base_f0_44k.yml",
+            )
         else:
             dit_checkpoint_path = args.checkpoint
             dit_config_path = args.config
         # f0 extractor
         from modules.rmvpe import RMVPE
 
-        model_path = load_custom_model_from_hf("lj1995/VoiceConversionWebUI", "rmvpe.pt", None)
+        model_path = load_custom_model_from_hf(
+            "lj1995/VoiceConversionWebUI", "rmvpe.pt", None
+        )
         f0_extractor = RMVPE(model_path, is_half=False, device=device)
         f0_fn = f0_extractor.infer_from_audio
 
     config = yaml.safe_load(open(dit_config_path, "r"))
     model_params = recursive_munch(config["model_params"])
-    model_params.dit_type = 'DiT'
+    model_params.dit_type = "DiT"
     model = build_model(model_params, stage="DiT")
     hop_length = config["preprocess_params"]["spect_params"]["hop_length"]
     sr = config["preprocess_params"]["sr"]
@@ -104,75 +114,106 @@ def load_models(args):
 
     vocoder_type = model_params.vocoder.type
 
-    if vocoder_type == 'bigvgan':
+    if vocoder_type == "bigvgan":
         from modules.bigvgan import bigvgan
+
         bigvgan_name = model_params.vocoder.name
-        bigvgan_model = bigvgan.BigVGAN.from_pretrained(bigvgan_name, use_cuda_kernel=False)
+        bigvgan_model = bigvgan.BigVGAN.from_pretrained(
+            bigvgan_name, use_cuda_kernel=False
+        )
         # remove weight norm in the model and set to eval mode
         bigvgan_model.remove_weight_norm()
         bigvgan_model = bigvgan_model.eval().to(device)
         vocoder_fn = bigvgan_model
-    elif vocoder_type == 'hifigan':
+    elif vocoder_type == "hifigan":
         from modules.hifigan.generator import HiFTGenerator
         from modules.hifigan.f0_predictor import ConvRNNF0Predictor
-        hift_config = yaml.safe_load(open('configs/hifigan.yml', 'r'))
-        hift_gen = HiFTGenerator(**hift_config['hift'], f0_predictor=ConvRNNF0Predictor(**hift_config['f0_predictor']))
-        hift_path = load_custom_model_from_hf("FunAudioLLM/CosyVoice-300M", 'hift.pt', None)
-        hift_gen.load_state_dict(torch.load(hift_path, map_location='cpu'))
+
+        hift_config = yaml.safe_load(open("configs/hifigan.yml", "r"))
+        hift_gen = HiFTGenerator(
+            **hift_config["hift"],
+            f0_predictor=ConvRNNF0Predictor(**hift_config["f0_predictor"]),
+        )
+        hift_path = load_custom_model_from_hf(
+            "FunAudioLLM/CosyVoice-300M", "hift.pt", None
+        )
+        hift_gen.load_state_dict(torch.load(hift_path, map_location="cpu"))
         hift_gen.eval()
         hift_gen.to(device)
         vocoder_fn = hift_gen
     elif vocoder_type == "vocos":
-        vocos_config = yaml.safe_load(open(model_params.vocoder.vocos.config, 'r'))
+        vocos_config = yaml.safe_load(open(model_params.vocoder.vocos.config, "r"))
         vocos_path = model_params.vocoder.vocos.path
-        vocos_model_params = recursive_munch(vocos_config['model_params'])
-        vocos = build_model(vocos_model_params, stage='mel_vocos')
+        vocos_model_params = recursive_munch(vocos_config["model_params"])
+        vocos = build_model(vocos_model_params, stage="mel_vocos")
         vocos_checkpoint_path = vocos_path
-        vocos, _, _, _ = load_checkpoint(vocos, None, vocos_checkpoint_path,
-                                         load_only_params=True, ignore_modules=[], is_distributed=False)
+        vocos, _, _, _ = load_checkpoint(
+            vocos,
+            None,
+            vocos_checkpoint_path,
+            load_only_params=True,
+            ignore_modules=[],
+            is_distributed=False,
+        )
         _ = [vocos[key].eval().to(device) for key in vocos]
         _ = [vocos[key].to(device) for key in vocos]
-        total_params = sum(sum(p.numel() for p in vocos[key].parameters() if p.requires_grad) for key in vocos.keys())
+        total_params = sum(
+            sum(p.numel() for p in vocos[key].parameters() if p.requires_grad)
+            for key in vocos.keys()
+        )
         print(f"Vocoder model total parameters: {total_params / 1_000_000:.2f}M")
         vocoder_fn = vocos.decoder
     else:
         raise ValueError(f"Unknown vocoder type: {vocoder_type}")
 
     speech_tokenizer_type = model_params.speech_tokenizer.type
-    if speech_tokenizer_type == 'whisper':
+    if speech_tokenizer_type == "whisper":
         # whisper
         from transformers import AutoFeatureExtractor, WhisperModel
+
         whisper_name = model_params.speech_tokenizer.name
-        
+
         # 让WhisperModel自动选择合适的数据类型，根据设备支持情况
         if fp16:
             # 如果启用fp16，尝试使用float16精度加载模型
             print(f"正在尝试使用fp16精度加载Whisper模型到{device}设备...")
             try:
-                whisper_model = WhisperModel.from_pretrained(whisper_name, torch_dtype=torch.float16).to(device)
+                whisper_model = WhisperModel.from_pretrained(
+                    whisper_name, torch_dtype=torch.float16
+                ).to(device)
                 model_dtype = whisper_model.encoder.dtype
-                print(f"Whisper模型已加载到{device}设备，使用模型默认数据类型: {model_dtype}")
+                print(
+                    f"Whisper模型已加载到{device}设备，使用模型默认数据类型: {model_dtype}"
+                )
             except Exception as e:
                 print(f"警告: 在{device}设备上无法使用fp16精度加载Whisper模型: {e}")
                 print(f"正在回退到float32精度加载Whisper模型...")
-                whisper_model = WhisperModel.from_pretrained(whisper_name, torch_dtype=torch.float32).to(device)
+                whisper_model = WhisperModel.from_pretrained(
+                    whisper_name, torch_dtype=torch.float32
+                ).to(device)
                 model_dtype = whisper_model.encoder.dtype
                 fp16 = False
                 print(f"信息: 已将内部fp16标志设置为False，以保持一致性")
                 print(f"Whisper模型已加载到{device}设备，使用float32数据类型")
             # 检查模型实际加载的数据类型是否与用户指定的fp16值一致
             if model_dtype != (torch.float16 if fp16 else torch.float32):
-                print(f"信息: Whisper模型已根据设备特性自动切换数据类型，从{'float16' if fp16 else 'float32'}切换到{model_dtype}")
+                print(
+                    f"信息: Whisper模型已根据设备特性自动切换数据类型，从{'float16' if fp16 else 'float32'}切换到{model_dtype}"
+                )
                 # 当模型自动切换数据类型时，将内部fp16标志设置为False，以避免后续处理中的不一致
                 if model_dtype == torch.float32:
                     fp16 = False
                     print(f"信息: 已将内部fp16标志设置为False，以保持一致性")
             else:
-                print(f"信息: Whisper模型已按用户指定的fp16设置加载，数据类型为{model_dtype}")
+                print(
+                    f"信息: Whisper模型已按用户指定的fp16设置加载，数据类型为{model_dtype}"
+                )
         else:
             # 如果不启用fp16，强制使用float32
             print(f"正在使用float32精度加载Whisper模型到{device}设备...")
-            whisper_model = WhisperModel.from_pretrained(whisper_name, torch_dtype=torch.float32).to(device)
+            whisper_model = WhisperModel.from_pretrained(
+                whisper_name, torch_dtype=torch.float32
+            ).to(device)
             print(f"Whisper模型已加载到{device}设备，使用float32数据类型")
         del whisper_model.decoder
         whisper_feature_extractor = AutoFeatureExtractor.from_pretrained(whisper_name)
@@ -183,9 +224,11 @@ def load_models(args):
             fp16 = False
             print(f"信息: 已将内部fp16标志设置为False，以保持一致性")
             # 重新加载模型为float32精度
-            whisper_model = WhisperModel.from_pretrained(whisper_name, torch_dtype=torch.float32).to(device)
+            whisper_model = WhisperModel.from_pretrained(
+                whisper_name, torch_dtype=torch.float32
+            ).to(device)
             print(f"信息: 已成功回退到float32精度并重新加载模型")
-            
+
         def semantic_fn(waves_16k):
             # 准备输入特征，如果指定了语言则添加语言参数
             feature_extractor_args = {
@@ -196,28 +239,34 @@ def load_models(args):
             if args.language is not None:
                 # print(f"正在使用语言参数: {args.language}")
                 feature_extractor_args["language"] = args.language
-            
-            ori_inputs = whisper_feature_extractor([waves_16k.squeeze(0).cpu().numpy()],
-                                                   **feature_extractor_args)
+
+            ori_inputs = whisper_feature_extractor(
+                [waves_16k.squeeze(0).cpu().numpy()], **feature_extractor_args
+            )
             ori_input_features = whisper_model._mask_input_features(
-                ori_inputs.input_features, attention_mask=ori_inputs.attention_mask).to(device)
+                ori_inputs.input_features, attention_mask=ori_inputs.attention_mask
+            ).to(device)
             with torch.no_grad():
                 # 确保输入数据类型与模型兼容，避免CPU/MPS设备上的LayerNorm错误
                 if device.type == "cpu":
                     # CPU设备可以尝试使用模型的数据类型，但如果出现问题则回退到float32
                     try:
-                        encoder_input = ori_input_features.to(whisper_model.encoder.dtype)
+                        encoder_input = ori_input_features.to(
+                            whisper_model.encoder.dtype
+                        )
                     except:
                         encoder_input = ori_input_features.to(torch.float32)
                 elif device.type == "mps":
                     # MPS设备可以尝试使用模型的数据类型，但如果出现问题则回退到float32
                     try:
-                        encoder_input = ori_input_features.to(whisper_model.encoder.dtype)
+                        encoder_input = ori_input_features.to(
+                            whisper_model.encoder.dtype
+                        )
                     except:
                         encoder_input = ori_input_features.to(torch.float32)
                 else:
                     encoder_input = ori_input_features.to(whisper_model.encoder.dtype)
-                
+
                 # 执行模型推理，处理可能的LayerNorm错误
                 try:
                     ori_outputs = whisper_model.encoder(
@@ -229,7 +278,9 @@ def load_models(args):
                     )
                 except RuntimeError as e:
                     if "LayerNormKernelImpl" in str(e) and device.type == "cpu":
-                        print(f"警告: 在CPU设备上使用fp16时遇到LayerNorm错误，正在回退到float32精度...")
+                        print(
+                            f"警告: 在CPU设备上使用fp16时遇到LayerNorm错误，正在回退到float32精度..."
+                        )
                         # 回退到float32精度重新加载模型
                         reload_whisper_model()
                         # 重新处理输入特征
@@ -246,15 +297,18 @@ def load_models(args):
                         # 如果不是预期的LayerNorm错误，则重新抛出异常
                         raise e
             S_ori = ori_outputs.last_hidden_state.to(torch.float32)
-            S_ori = S_ori[:, :waves_16k.size(-1) // 320 + 1]
+            S_ori = S_ori[:, : waves_16k.size(-1) // 320 + 1]
             return S_ori
-    elif speech_tokenizer_type == 'cnhubert':
+    elif speech_tokenizer_type == "cnhubert":
         from transformers import (
             Wav2Vec2FeatureExtractor,
             HubertModel,
         )
-        hubert_model_name = config['model_params']['speech_tokenizer']['name']
-        hubert_feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(hubert_model_name)
+
+        hubert_model_name = config["model_params"]["speech_tokenizer"]["name"]
+        hubert_feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(
+            hubert_model_name
+        )
         hubert_model = HubertModel.from_pretrained(hubert_model_name)
         hubert_model = hubert_model.to(device)
         hubert_model = hubert_model.eval()
@@ -264,14 +318,15 @@ def load_models(args):
 
         def semantic_fn(waves_16k):
             ori_waves_16k_input_list = [
-                waves_16k[bib].cpu().numpy()
-                for bib in range(len(waves_16k))
+                waves_16k[bib].cpu().numpy() for bib in range(len(waves_16k))
             ]
-            ori_inputs = hubert_feature_extractor(ori_waves_16k_input_list,
-                                                  return_tensors="pt",
-                                                  return_attention_mask=True,
-                                                  padding=True,
-                                                  sampling_rate=16000).to(device)
+            ori_inputs = hubert_feature_extractor(
+                ori_waves_16k_input_list,
+                return_tensors="pt",
+                return_attention_mask=True,
+                padding=True,
+                sampling_rate=16000,
+            ).to(device)
             with torch.no_grad():
                 # 根据fp16参数决定是否使用half精度
                 if fp16:
@@ -283,13 +338,14 @@ def load_models(args):
                 )
             S_ori = ori_outputs.last_hidden_state.float()
             return S_ori
-    elif speech_tokenizer_type == 'xlsr':
+    elif speech_tokenizer_type == "xlsr":
         from transformers import (
             Wav2Vec2FeatureExtractor,
             Wav2Vec2Model,
         )
-        model_name = config['model_params']['speech_tokenizer']['name']
-        output_layer = config['model_params']['speech_tokenizer']['output_layer']
+
+        model_name = config["model_params"]["speech_tokenizer"]["name"]
+        output_layer = config["model_params"]["speech_tokenizer"]["output_layer"]
         wav2vec_feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_name)
         wav2vec_model = Wav2Vec2Model.from_pretrained(model_name)
         wav2vec_model.encoder.layers = wav2vec_model.encoder.layers[:output_layer]
@@ -301,14 +357,15 @@ def load_models(args):
 
         def semantic_fn(waves_16k):
             ori_waves_16k_input_list = [
-                waves_16k[bib].cpu().numpy()
-                for bib in range(len(waves_16k))
+                waves_16k[bib].cpu().numpy() for bib in range(len(waves_16k))
             ]
-            ori_inputs = wav2vec_feature_extractor(ori_waves_16k_input_list,
-                                                   return_tensors="pt",
-                                                   return_attention_mask=True,
-                                                   padding=True,
-                                                   sampling_rate=16000).to(device)
+            ori_inputs = wav2vec_feature_extractor(
+                ori_waves_16k_input_list,
+                return_tensors="pt",
+                return_attention_mask=True,
+                padding=True,
+                sampling_rate=16000,
+            ).to(device)
             with torch.no_grad():
                 # 根据fp16参数决定是否使用half精度
                 if fp16:
@@ -324,14 +381,16 @@ def load_models(args):
         raise ValueError(f"Unknown speech tokenizer type: {speech_tokenizer_type}")
     # Generate mel spectrograms
     mel_fn_args = {
-        "n_fft": config['preprocess_params']['spect_params']['n_fft'],
-        "win_size": config['preprocess_params']['spect_params']['win_length'],
-        "hop_size": config['preprocess_params']['spect_params']['hop_length'],
-        "num_mels": config['preprocess_params']['spect_params']['n_mels'],
+        "n_fft": config["preprocess_params"]["spect_params"]["n_fft"],
+        "win_size": config["preprocess_params"]["spect_params"]["win_length"],
+        "hop_size": config["preprocess_params"]["spect_params"]["hop_length"],
+        "num_mels": config["preprocess_params"]["spect_params"]["n_mels"],
         "sampling_rate": sr,
-        "fmin": config['preprocess_params']['spect_params'].get('fmin', 0),
-        "fmax": None if config['preprocess_params']['spect_params'].get('fmax', "None") == "None" else 8000,
-        "center": False
+        "fmin": config["preprocess_params"]["spect_params"].get("fmin", 0),
+        "fmax": None
+        if config["preprocess_params"]["spect_params"].get("fmax", "None") == "None"
+        else 8000,
+        "center": False,
     }
     from modules.audio import mel_spectrogram
 
@@ -347,18 +406,24 @@ def load_models(args):
         mel_fn_args,
     )
 
+
 def adjust_f0_semitones(f0_sequence, n_semitones):
     factor = 2 ** (n_semitones / 12)
     return f0_sequence * factor
+
 
 def crossfade(chunk1, chunk2, overlap):
     fade_out = np.cos(np.linspace(0, np.pi / 2, overlap)) ** 2
     fade_in = np.cos(np.linspace(np.pi / 2, 0, overlap)) ** 2
     if len(chunk2) < overlap:
-        chunk2[:overlap] = chunk2[:overlap] * fade_in[:len(chunk2)] + (chunk1[-overlap:] * fade_out)[:len(chunk2)]
+        chunk2[:overlap] = (
+            chunk2[:overlap] * fade_in[: len(chunk2)]
+            + (chunk1[-overlap:] * fade_out)[: len(chunk2)]
+        )
     else:
         chunk2[:overlap] = chunk2[:overlap] * fade_in + chunk1[-overlap:] * fade_out
     return chunk2
+
 
 @torch.no_grad()
 def main(args):
@@ -367,9 +432,11 @@ def main(args):
         print("警告: --yue-fix 需要启用 --f0-condition True 才能生效")
         print("已自动启用 f0-condition")
         args.f0_condition = True
-    
-    model, semantic_fn, f0_fn, vocoder_fn, campplus_model, mel_fn, mel_fn_args = load_models(args)
-    sr = mel_fn_args['sampling_rate']
+
+    model, semantic_fn, f0_fn, vocoder_fn, campplus_model, mel_fn, mel_fn_args = (
+        load_models(args)
+    )
+    original_sr = mel_fn_args["sampling_rate"]
     f0_condition = args.f0_condition
     auto_f0_adjust = args.auto_f0_adjust
     pitch_shift = args.semi_tone_shift
@@ -379,22 +446,50 @@ def main(args):
     diffusion_steps = args.diffusion_steps
     length_adjust = args.length_adjust
     inference_cfg_rate = args.inference_cfg_rate
-    source_audio = librosa.load(source, sr=sr)[0]
-    ref_audio = librosa.load(target_name, sr=sr)[0]
 
-    sr = 22050 if not f0_condition else 44100
+    # 使用torchaudio加载音频，更可靠
+    def load_audio_with_torchaudio(filepath, target_sr):
+        """使用torchaudio加载音频并重采样到目标采样率"""
+        try:
+            # 加载音频
+            audio, file_sr = torchaudio.load(filepath)
+            # 转换为单声道
+            if audio.shape[0] > 1:
+                audio = audio.mean(dim=0, keepdim=True)
+
+            # 如果需要，重采样到目标采样率
+            if file_sr != target_sr:
+                audio = torchaudio.functional.resample(audio, file_sr, target_sr)
+
+            return audio.squeeze(0).numpy()  # 返回numpy数组以保持兼容性
+        except Exception as e:
+            print(f"警告: torchaudio加载失败 {filepath}: {e}")
+            # 回退到librosa
+            import librosa
+
+            return librosa.load(filepath, sr=target_sr)[0]
+
+    source_audio = load_audio_with_torchaudio(source, original_sr)
+    ref_audio = load_audio_with_torchaudio(target_name, original_sr)
+
+    # 设置处理采样率（基于f0_condition）
+    processing_sr = 22050 if not f0_condition else 44100
     hop_length = 256 if not f0_condition else 512
-    max_context_window = sr // hop_length * 30
+    max_context_window = processing_sr // hop_length * 30
     overlap_frame_len = 16
     overlap_wave_len = overlap_frame_len * hop_length
 
-    # Process audio
+    # Process audio - 注意：音频是用original_sr加载的，但切片使用processing_sr
     source_audio = torch.tensor(source_audio).unsqueeze(0).float().to(device)
-    ref_audio = torch.tensor(ref_audio[:sr * 25]).unsqueeze(0).float().to(device)
+    ref_audio = (
+        torch.tensor(ref_audio[: processing_sr * 25]).unsqueeze(0).float().to(device)
+    )
 
     time_vc_start = time.time()
     # Resample
-    converted_waves_16k = torchaudio.functional.resample(source_audio, sr, 16000)
+    converted_waves_16k = torchaudio.functional.resample(
+        source_audio, processing_sr, 16000
+    )
     # if source audio less than 30 seconds, whisper can handle in one forward
     if converted_waves_16k.size(-1) <= 16000 * 30:
         S_alt = semantic_fn(converted_waves_16k)
@@ -405,21 +500,36 @@ def main(args):
         traversed_time = 0
         while traversed_time < converted_waves_16k.size(-1):
             if buffer is None:  # first chunk
-                chunk = converted_waves_16k[:, traversed_time:traversed_time + 16000 * 30]
+                chunk = converted_waves_16k[
+                    :, traversed_time : traversed_time + 16000 * 30
+                ]
             else:
                 chunk = torch.cat(
-                    [buffer, converted_waves_16k[:, traversed_time:traversed_time + 16000 * (30 - overlapping_time)]],
-                    dim=-1)
+                    [
+                        buffer,
+                        converted_waves_16k[
+                            :,
+                            traversed_time : traversed_time
+                            + 16000 * (30 - overlapping_time),
+                        ],
+                    ],
+                    dim=-1,
+                )
             S_alt = semantic_fn(chunk)
             if traversed_time == 0:
                 S_alt_list.append(S_alt)
             else:
-                S_alt_list.append(S_alt[:, 50 * overlapping_time:])
-            buffer = chunk[:, -16000 * overlapping_time:]
-            traversed_time += 30 * 16000 if traversed_time == 0 else chunk.size(-1) - 16000 * overlapping_time
+                S_alt_list.append(S_alt[:, 50 * overlapping_time :])
+            buffer = chunk[:, -16000 * overlapping_time :]
+            traversed_time += (
+                30 * 16000
+                if traversed_time == 0
+                else chunk.size(-1) - 16000 * overlapping_time
+            )
         S_alt = torch.cat(S_alt_list, dim=1)
 
-    ori_waves_16k = torchaudio.functional.resample(ref_audio, sr, 16000)
+    print("target_name:" + target_name)
+    ori_waves_16k = torchaudio.functional.resample(ref_audio, processing_sr, 16000)
     S_ori = semantic_fn(ori_waves_16k)
 
     mel = mel_fn(source_audio.to(device).float())
@@ -432,17 +542,15 @@ def main(args):
     if device.type == "mps":
         # MPS不支持ComplexFloat类型，需要在CPU上计算fbank
         ori_waves_16k_cpu = ori_waves_16k.cpu()
-        feat2 = torchaudio.compliance.kaldi.fbank(ori_waves_16k_cpu,
-                                                  num_mel_bins=80,
-                                                  dither=0,
-                                                  sample_frequency=16000)
+        feat2 = torchaudio.compliance.kaldi.fbank(
+            ori_waves_16k_cpu, num_mel_bins=80, dither=0, sample_frequency=16000
+        )
         # 将结果移回MPS设备
         feat2 = feat2.to(device)
     else:
-        feat2 = torchaudio.compliance.kaldi.fbank(ori_waves_16k,
-                                                  num_mel_bins=80,
-                                                  dither=0,
-                                                  sample_frequency=16000)
+        feat2 = torchaudio.compliance.kaldi.fbank(
+            ori_waves_16k, num_mel_bins=80, dither=0, sample_frequency=16000
+        )
     feat2 = feat2 - feat2.mean(dim=0, keepdim=True)
     style2 = campplus_model(feat2.unsqueeze(0))
 
@@ -466,14 +574,19 @@ def main(args):
         # shift alt log f0 level to ori log f0 level
         shifted_log_f0_alt = log_f0_alt.clone()
         if auto_f0_adjust:
-            shifted_log_f0_alt[F0_alt > 1] = log_f0_alt[F0_alt > 1] - median_log_f0_alt + median_log_f0_ori
+            shifted_log_f0_alt[F0_alt > 1] = (
+                log_f0_alt[F0_alt > 1] - median_log_f0_alt + median_log_f0_ori
+            )
         shifted_f0_alt = torch.exp(shifted_log_f0_alt)
         if pitch_shift != 0:
-            shifted_f0_alt[F0_alt > 1] = adjust_f0_semitones(shifted_f0_alt[F0_alt > 1], pitch_shift)
-        
+            shifted_f0_alt[F0_alt > 1] = adjust_f0_semitones(
+                shifted_f0_alt[F0_alt > 1], pitch_shift
+            )
+
         # 粤语声调后处理修正
         if args.yue_fix is not None:
             from modules.yue_fix import apply_yue_fix
+
             print(f"应用粤语修正: {args.yue_fix} (强度: {args.yue_fix_strength})")
             # 将 shifted_f0_alt 转为 numpy 进行修正
             f0_numpy = shifted_f0_alt[0].cpu().numpy()
@@ -481,10 +594,10 @@ def main(args):
                 audio=None,  # 暂不使用音频
                 f0=f0_numpy,
                 fix_file_path=args.yue_fix,
-                sr=sr,
+                sr=processing_sr,
                 hop_length=hop_length,
                 strength=args.yue_fix_strength,
-                smooth=True
+                smooth=True,
             )
             shifted_f0_alt = torch.from_numpy(f0_corrected).float().to(device)[None]
             print("粤语声调修正已应用")
@@ -494,13 +607,12 @@ def main(args):
         shifted_f0_alt = None
 
     # Length regulation
-    cond, _, codes, commitment_loss, codebook_loss = model.length_regulator(S_alt, ylens=target_lengths,
-                                                                                       n_quantizers=3,
-                                                                                       f0=shifted_f0_alt)
-    prompt_condition, _, codes, commitment_loss, codebook_loss = model.length_regulator(S_ori,
-                                                                                       ylens=target2_lengths,
-                                                                                       n_quantizers=3,
-                                                                                       f0=F0_ori)
+    cond, _, codes, commitment_loss, codebook_loss = model.length_regulator(
+        S_alt, ylens=target_lengths, n_quantizers=3, f0=shifted_f0_alt
+    )
+    prompt_condition, _, codes, commitment_loss, codebook_loss = model.length_regulator(
+        S_ori, ylens=target2_lengths, n_quantizers=3, f0=F0_ori
+    )
 
     max_source_window = max_context_window - mel2.size(2)
     # split source condition (cond) into chunks
@@ -508,36 +620,54 @@ def main(args):
     generated_wave_chunks = []
     # generate chunk by chunk and stream the output
     while processed_frames < cond.size(1):
-        chunk_cond = cond[:, processed_frames:processed_frames + max_source_window]
+        chunk_cond = cond[:, processed_frames : processed_frames + max_source_window]
         is_last_chunk = processed_frames + max_source_window >= cond.size(1)
         cat_condition = torch.cat([prompt_condition, chunk_cond], dim=1)
-        
+
         # 处理MPS设备上的自动混合精度计算
         if device.type == "mps":
             # MPS不支持autocast，直接执行计算
-            vc_target = model.cfm.inference(cat_condition,
-                                            torch.LongTensor([cat_condition.size(1)]).to(mel2.device),
-                                            mel2, style2, None, diffusion_steps,
-                                            inference_cfg_rate=inference_cfg_rate)
-            vc_target = vc_target[:, :, mel2.size(-1):]
+            vc_target = model.cfm.inference(
+                cat_condition,
+                torch.LongTensor([cat_condition.size(1)]).to(mel2.device),
+                mel2,
+                style2,
+                None,
+                diffusion_steps,
+                inference_cfg_rate=inference_cfg_rate,
+            )
+            vc_target = vc_target[:, :, mel2.size(-1) :]
         else:
             # 其他设备使用autocast
             # 对于CPU设备或fp16为False的情况，不使用autocast
             if device.type == "cpu" or not fp16:
                 # Voice Conversion
-                vc_target = model.cfm.inference(cat_condition,
-                                                torch.LongTensor([cat_condition.size(1)]).to(mel2.device),
-                                                mel2, style2, None, diffusion_steps,
-                                                inference_cfg_rate=inference_cfg_rate)
-                vc_target = vc_target[:, :, mel2.size(-1):]
+                vc_target = model.cfm.inference(
+                    cat_condition,
+                    torch.LongTensor([cat_condition.size(1)]).to(mel2.device),
+                    mel2,
+                    style2,
+                    None,
+                    diffusion_steps,
+                    inference_cfg_rate=inference_cfg_rate,
+                )
+                vc_target = vc_target[:, :, mel2.size(-1) :]
             else:
-                with torch.autocast(device_type=device.type, dtype=torch.float16 if fp16 else torch.float32):
+                with torch.autocast(
+                    device_type=device.type,
+                    dtype=torch.float16 if fp16 else torch.float32,
+                ):
                     # Voice Conversion
-                    vc_target = model.cfm.inference(cat_condition,
-                                                    torch.LongTensor([cat_condition.size(1)]).to(mel2.device),
-                                                    mel2, style2, None, diffusion_steps,
-                                                    inference_cfg_rate=inference_cfg_rate)
-                    vc_target = vc_target[:, :, mel2.size(-1):]
+                    vc_target = model.cfm.inference(
+                        cat_condition,
+                        torch.LongTensor([cat_condition.size(1)]).to(mel2.device),
+                        mel2,
+                        style2,
+                        None,
+                        diffusion_steps,
+                        inference_cfg_rate=inference_cfg_rate,
+                    )
+                    vc_target = vc_target[:, :, mel2.size(-1) :]
         vc_wave = vocoder_fn(vc_target.float()).squeeze()
         vc_wave = vc_wave[None, :]
         if processed_frames == 0:
@@ -550,25 +680,37 @@ def main(args):
             previous_chunk = vc_wave[0, -overlap_wave_len:]
             processed_frames += vc_target.size(2) - overlap_frame_len
         elif is_last_chunk:
-            output_wave = crossfade(previous_chunk.cpu().numpy(), vc_wave[0].cpu().numpy(), overlap_wave_len)
+            output_wave = crossfade(
+                previous_chunk.cpu().numpy(), vc_wave[0].cpu().numpy(), overlap_wave_len
+            )
             generated_wave_chunks.append(output_wave)
             processed_frames += vc_target.size(2) - overlap_frame_len
             break
         else:
-            output_wave = crossfade(previous_chunk.cpu().numpy(), vc_wave[0, :-overlap_wave_len].cpu().numpy(),
-                                    overlap_wave_len)
+            output_wave = crossfade(
+                previous_chunk.cpu().numpy(),
+                vc_wave[0, :-overlap_wave_len].cpu().numpy(),
+                overlap_wave_len,
+            )
             generated_wave_chunks.append(output_wave)
             previous_chunk = vc_wave[0, -overlap_wave_len:]
             processed_frames += vc_target.size(2) - overlap_frame_len
     vc_wave = torch.tensor(np.concatenate(generated_wave_chunks))[None, :].float()
     time_vc_end = time.time()
-    print(f"RTF: {(time_vc_end - time_vc_start) / vc_wave.size(-1) * sr}")
+    print(f"RTF: {(time_vc_end - time_vc_start) / vc_wave.size(-1) * processing_sr}")
 
     source_name = os.path.basename(source).split(".")[0]
     target_name = os.path.basename(target_name).split(".")[0]
     os.makedirs(args.output, exist_ok=True)
     vc = "svc" if args.f0_condition else "vc"
-    torchaudio.save(os.path.join(args.output, f"{source_name}_{target_name}_{length_adjust}_{diffusion_steps}_{inference_cfg_rate}_{vc}.wav"), vc_wave.cpu(), sr)
+    torchaudio.save(
+        os.path.join(
+            args.output,
+            f"{source_name}_{target_name}_{length_adjust}_{diffusion_steps}_{inference_cfg_rate}_{vc}.wav",
+        ),
+        vc_wave.cpu(),
+        processing_sr,
+    )
 
 
 if __name__ == "__main__":
@@ -582,14 +724,28 @@ if __name__ == "__main__":
     parser.add_argument("--f0-condition", type=str2bool, default=False)
     parser.add_argument("--auto-f0-adjust", type=str2bool, default=False)
     parser.add_argument("--semi-tone-shift", type=int, default=0)
-    parser.add_argument("--checkpoint", type=str, help="Path to the checkpoint file", default=None)
-    parser.add_argument("--config", type=str, help="Path to the config file", default=None)
+    parser.add_argument(
+        "--checkpoint", type=str, help="Path to the checkpoint file", default=None
+    )
+    parser.add_argument(
+        "--config", type=str, help="Path to the config file", default=None
+    )
     parser.add_argument("--fp16", type=str2bool, default=True)
-    parser.add_argument("--language", type=str, default=None, help="Language for Whisper model")
+    parser.add_argument(
+        "--language", type=str, default=None, help="Language for Whisper model"
+    )
     # 粤语后处理修正参数
-    parser.add_argument("--yue-fix", type=str, default=None, 
-                        help="Path to Cantonese pronunciation fix file (requires --f0-condition True)")
-    parser.add_argument("--yue-fix-strength", type=float, default=0.8,
-                        help="Strength of Cantonese tone correction (0.0-1.0, default: 0.8)")
+    parser.add_argument(
+        "--yue-fix",
+        type=str,
+        default=None,
+        help="Path to Cantonese pronunciation fix file (requires --f0-condition True)",
+    )
+    parser.add_argument(
+        "--yue-fix-strength",
+        type=float,
+        default=0.8,
+        help="Strength of Cantonese tone correction (0.0-1.0, default: 0.8)",
+    )
     args = parser.parse_args()
     main(args)
